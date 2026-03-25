@@ -2089,29 +2089,53 @@ class LLMClient:
 
         parsed_messages = self._get_google_messages(messages)
 
+        # Retry logic for 503/429 errors in streaming
+        max_retries = 5
+        for attempt in range(max_retries):
+            try:
+                stream_iterator = iterator_to_async(client.models.generate_content_stream)(
+                    model=model,
+                    contents=parsed_messages,
+                    config=GenerateContentConfig(
+                        tools=google_tools,
+                        tool_config=(
+                            GoogleToolConfig(
+                                function_calling_config=GoogleFunctionCallingConfig(
+                                    mode=GoogleFunctionCallingConfigMode.ANY,
+                                ),
+                            )
+                            if tools
+                            else None
+                        ),
+                        system_instruction=self._get_system_prompt(messages),
+                        response_mime_type="application/json" if not tools else None,
+                        response_json_schema=response_format if not tools else None,
+                        max_output_tokens=max_tokens,
+                    ),
+                )
+                break  # Successfully created stream
+            except Exception as e:
+                error_message = str(e).lower()
+                is_retryable = (
+                    "503" in error_message or "429" in error_message
+                    or "service unavailable" in error_message
+                    or "high demand" in error_message
+                    or "rate limit" in error_message
+                )
+                if is_retryable and attempt < max_retries - 1:
+                    wait_time = min(2 ** attempt + random.uniform(0, 1), 30)
+                    print(f"Stream API call failed (attempt {attempt + 1}/{max_retries}): {str(e)[:100]}. Retrying in {wait_time:.1f}s")
+                    await asyncio.sleep(wait_time)
+                    # Rotate to next API key on retry
+                    if self.llm_provider == LLMProvider.GOOGLE:
+                        client = self._get_google_client()
+                    continue
+                raise
+
         generated_contents = []
         tool_calls: List[GoogleToolCall] = []
         has_response_schema_tool_call = False
-        async for event in iterator_to_async(client.models.generate_content_stream)(
-            model=model,
-            contents=parsed_messages,
-            config=GenerateContentConfig(
-                tools=google_tools,
-                tool_config=(
-                    GoogleToolConfig(
-                        function_calling_config=GoogleFunctionCallingConfig(
-                            mode=GoogleFunctionCallingConfigMode.ANY,
-                        ),
-                    )
-                    if tools
-                    else None
-                ),
-                system_instruction=self._get_system_prompt(messages),
-                response_mime_type="application/json" if not tools else None,
-                response_json_schema=response_format if not tools else None,
-                max_output_tokens=max_tokens,
-            ),
-        ):
+        async for event in stream_iterator:
             if not (
                 event.candidates
                 and event.candidates[0].content

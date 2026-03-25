@@ -96,29 +96,41 @@ async def generate_ppt_outline(
     model = get_model()
     response_model = get_presentation_outline_model_with_n_slides(n_slides)
 
-    client = LLMClient()
+    import asyncio, random
 
-    try:
-        async for chunk in client.stream_structured(
-            model,
-            get_messages(
-                content,
-                n_slides,
-                language,
-                additional_context,
-                tone,
-                verbosity,
-                instructions,
-                include_title_slide,
-            ),
-            response_model.model_json_schema(),
-            strict=True,
-            tools=(
-                [SearchWebTool]
-                if (client.enable_web_grounding() and web_search)
-                else None
-            ),
-        ):
-            yield chunk
-    except Exception as e:
-        yield handle_llm_client_exceptions(e)
+    max_retries = 5
+    messages = get_messages(
+        content, n_slides, language, additional_context,
+        tone, verbosity, instructions, include_title_slide,
+    )
+    schema = response_model.model_json_schema()
+
+    for attempt in range(max_retries):
+        client = LLMClient()
+        try:
+            async for chunk in client.stream_structured(
+                model,
+                messages,
+                schema,
+                strict=True,
+                tools=(
+                    [SearchWebTool]
+                    if (client.enable_web_grounding() and web_search)
+                    else None
+                ),
+            ):
+                yield chunk
+            return  # Success - exit retry loop
+        except Exception as e:
+            error_msg = str(e).lower()
+            is_retryable = (
+                "503" in error_msg or "429" in error_msg
+                or "high demand" in error_msg or "service unavailable" in error_msg
+            )
+            if is_retryable and attempt < max_retries - 1:
+                wait_time = min(2 ** attempt + random.uniform(0, 1), 30)
+                print(f"Outline generation failed (attempt {attempt + 1}/{max_retries}): retrying in {wait_time:.1f}s")
+                await asyncio.sleep(wait_time)
+                continue
+            yield handle_llm_client_exceptions(e)
+            return
