@@ -138,7 +138,7 @@ async def get_slide_content_from_type_and_outline(
     )
     import asyncio, random
 
-    max_retries = 3
+    max_retries = 5
     for attempt in range(max_retries):
         try:
             client = LLMClient()
@@ -155,14 +155,21 @@ async def get_slide_content_from_type_and_outline(
                 return response
             if attempt < max_retries - 1:
                 wait_time = 2 ** attempt + random.uniform(0, 1)
-                print(f"get_slide_content_from_type_and_outline: empty response, retrying in {wait_time:.1f}s")
+                print(f"get_slide_content_from_type_and_outline: empty response, retrying in {wait_time:.1f}s (attempt {attempt+1}/{max_retries})")
                 await asyncio.sleep(wait_time)
                 continue
             raise HTTPException(status_code=500, detail="LLM returned empty response after retries")
 
         except Exception as e:
             error_msg = str(e).lower()
-            is_retryable = "503" in error_msg or "429" in error_msg or "high demand" in error_msg
+            is_retryable = (
+                "503" in error_msg or "429" in error_msg
+                or "high demand" in error_msg
+                or "unterminated" in error_msg
+                or "expecting" in error_msg
+                or "invalid" in error_msg and "json" in error_msg
+                or "decode" in error_msg
+            )
             if is_retryable and attempt < max_retries - 1:
                 wait_time = 2 ** attempt + random.uniform(0, 1)
                 print(f"get_slide_content_from_type_and_outline: {e}, retrying in {wait_time:.1f}s")

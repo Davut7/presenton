@@ -103,8 +103,9 @@ class LLMClient:
         self.llm_provider = get_llm_provider()
         self._client = self._get_client()
         self.tool_calls_handler = LLMToolCallsHandler(self)
-        # Rate limiter: max 5 concurrent requests to prevent API overload
-        self._rate_limiter = asyncio.Semaphore(5)
+        # Rate limiter: scale with number of API keys
+        num_keys = max(len(_GoogleKeyRotator._keys), 1) if self.llm_provider == LLMProvider.GOOGLE else 1
+        self._rate_limiter = asyncio.Semaphore(5 * num_keys)
 
     async def _call_with_retry(self, func, *args, max_retries=5, **kwargs):
         """
