@@ -947,6 +947,8 @@ class LLMClient:
             ),
         )
 
+        if not response.candidates or not response.candidates[0].content:
+            return None
         content = response.candidates[0].content
         response_parts = content.parts
         text_content = None

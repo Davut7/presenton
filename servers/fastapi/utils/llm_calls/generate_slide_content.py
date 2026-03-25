@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Optional
+from fastapi import HTTPException
 from models.llm_message import LLMSystemMessage, LLMUserMessage
 from models.presentation_layout import SlideLayoutModel
 from models.presentation_outline_model import SlideOutlineModel
@@ -135,18 +136,37 @@ async def get_slide_content_from_type_and_outline(
     print(
         f"get_slide_content_from_type_and_outline: model={model} outline_len={len(outline.content or '')} language={language}"
     )
-    try:
-        response = await client.generate_structured(
-            model=model,
-            messages=messages,
-            response_format=response_schema,
-            strict=False,
-        )
-        print(
-            f"get_slide_content_from_type_and_outline: response is None={response is None} keys={list(response.keys())[:6] if isinstance(response, dict) else None}"
-        )
-        return response
+    import asyncio, random
 
-    except Exception as e:
-        print(f"get_slide_content_from_type_and_outline: exception={e}")
-        raise handle_llm_client_exceptions(e)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            client = LLMClient()
+            response = await client.generate_structured(
+                model=model,
+                messages=messages,
+                response_format=response_schema,
+                strict=False,
+            )
+            print(
+                f"get_slide_content_from_type_and_outline: response is None={response is None} keys={list(response.keys())[:6] if isinstance(response, dict) else None}"
+            )
+            if response is not None:
+                return response
+            if attempt < max_retries - 1:
+                wait_time = 2 ** attempt + random.uniform(0, 1)
+                print(f"get_slide_content_from_type_and_outline: empty response, retrying in {wait_time:.1f}s")
+                await asyncio.sleep(wait_time)
+                continue
+            raise HTTPException(status_code=500, detail="LLM returned empty response after retries")
+
+        except Exception as e:
+            error_msg = str(e).lower()
+            is_retryable = "503" in error_msg or "429" in error_msg or "high demand" in error_msg
+            if is_retryable and attempt < max_retries - 1:
+                wait_time = 2 ** attempt + random.uniform(0, 1)
+                print(f"get_slide_content_from_type_and_outline: {e}, retrying in {wait_time:.1f}s")
+                await asyncio.sleep(wait_time)
+                continue
+            print(f"get_slide_content_from_type_and_outline: exception={e}")
+            raise handle_llm_client_exceptions(e)
