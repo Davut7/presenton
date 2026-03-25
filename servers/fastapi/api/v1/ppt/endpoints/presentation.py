@@ -303,8 +303,14 @@ async def stream_presentation(
                     presentation.instructions,
                 )
             except HTTPException as e:
+                if e.status_code == 500 and "empty response" in str(e.detail).lower():
+                    print(f"Skipping slide {i}: {e.detail}")
+                    continue
                 yield SSEErrorResponse(detail=e.detail).to_string()
                 return
+            except Exception as e:
+                print(f"Skipping slide {i}: {e}")
+                continue
 
             slide = SlideModel(
                 presentation=id,
@@ -706,11 +712,15 @@ async def generate_presentation_handler(
                 )
                 for i in range(start, end)
             ]
-            batch_contents: List[dict] = await asyncio.gather(*content_tasks)
+            batch_results = await asyncio.gather(*content_tasks, return_exceptions=True)
 
-            # Build slides for this batch
+            # Build slides for this batch (skip failed slides)
             batch_slides: List[SlideModel] = []
-            for offset, slide_content in enumerate(batch_contents):
+            for offset, slide_result in enumerate(batch_results):
+                if isinstance(slide_result, Exception):
+                    print(f"Skipping slide {start + offset}: {slide_result}")
+                    continue
+                slide_content = slide_result
                 i = start + offset
                 slide_layout = slide_layouts[i]
                 slide = SlideModel(
