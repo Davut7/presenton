@@ -1,4 +1,7 @@
+import os
+
 from fastapi import Request
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from utils.get_env import get_can_change_keys_env
@@ -9,4 +12,29 @@ class UserConfigEnvUpdateMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         if get_can_change_keys_env() != "false":
             update_env_with_user_config()
+        return await call_next(request)
+
+
+class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
+    """Validates API key from X-API-Key header or api_key query param."""
+
+    async def dispatch(self, request: Request, call_next):
+        api_key = os.getenv("API_KEY")
+        if not api_key:
+            # No API_KEY set — auth disabled, allow all
+            return await call_next(request)
+
+        # Allow internal requests (from Next.js / Puppeteer inside container)
+        client_host = request.client.host if request.client else ""
+        if client_host in ("127.0.0.1", "::1", "localhost"):
+            return await call_next(request)
+
+        # Check header or query param
+        request_key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+        if request_key != api_key:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or missing API key"},
+            )
+
         return await call_next(request)
