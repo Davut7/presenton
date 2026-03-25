@@ -50,7 +50,9 @@ def get_openai_model_env():
 
 
 def get_google_api_key_env():
-    return os.getenv("GOOGLE_API_KEY")
+    raw = os.getenv("GOOGLE_API_KEY") or ""
+    # Support comma-separated keys; return the first one for single-key contexts
+    return raw.split(",")[0].strip() if raw else None
 
 
 def get_google_model_env():

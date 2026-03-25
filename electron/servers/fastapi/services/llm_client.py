@@ -81,7 +81,8 @@ class _GoogleKeyRotator:
 
     @classmethod
     def init_keys(cls):
-        raw = get_google_api_key_env() or ""
+        import os
+        raw = os.getenv("GOOGLE_API_KEY") or ""
         cls._keys = [k.strip() for k in raw.split(",") if k.strip()]
 
     @classmethod
