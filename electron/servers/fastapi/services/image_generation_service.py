@@ -2,6 +2,7 @@ import asyncio
 import base64
 import json
 import os
+from urllib.parse import quote_plus
 import aiohttp
 from fastapi import HTTPException
 from google import genai
@@ -183,22 +184,36 @@ class ImageGenerationService:
         )
 
     async def get_image_from_pexels(self, prompt: str) -> str:
+        encoded_prompt = quote_plus(prompt)
         async with aiohttp.ClientSession(trust_env=True) as session:
             response = await session.get(
-                f"https://api.pexels.com/v1/search?query={prompt}&per_page=1",
+                f"https://api.pexels.com/v1/search?query={encoded_prompt}&per_page=5",
                 headers={"Authorization": f"{get_pexels_api_key_env()}"},
+                timeout=aiohttp.ClientTimeout(total=30),
             )
+            if response.status != 200:
+                raise Exception(f"Pexels API returned status {response.status}")
             data = await response.json()
-            image_url = data["photos"][0]["src"]["large"]
+            photos = data.get("photos", [])
+            if not photos:
+                raise Exception(f"Pexels returned no photos for query: {prompt}")
+            image_url = photos[0]["src"]["large"]
             return image_url
 
     async def get_image_from_pixabay(self, prompt: str) -> str:
+        encoded_prompt = quote_plus(prompt)
         async with aiohttp.ClientSession(trust_env=True) as session:
             response = await session.get(
-                f"https://pixabay.com/api/?key={get_pixabay_api_key_env()}&q={prompt}&image_type=photo&per_page=3"
+                f"https://pixabay.com/api/?key={get_pixabay_api_key_env()}&q={encoded_prompt}&image_type=photo&per_page=5",
+                timeout=aiohttp.ClientTimeout(total=30),
             )
+            if response.status != 200:
+                raise Exception(f"Pixabay API returned status {response.status}")
             data = await response.json()
-            image_url = data["hits"][0]["largeImageURL"]
+            hits = data.get("hits", [])
+            if not hits:
+                raise Exception(f"Pixabay returned no images for query: {prompt}")
+            image_url = hits[0]["largeImageURL"]
             return image_url
 
     async def generate_image_comfyui(self, prompt: str, output_directory: str) -> str:

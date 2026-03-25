@@ -39,6 +39,16 @@ export async function POST(req: NextRequest) {
     timeout: 300000,
   });
 
+  // Wait for slides to render (React SPA fetches data after hydration)
+  try {
+    await page.waitForSelector(
+      "#presentation-slides-wrapper [data-speaker-note]",
+      { timeout: 60000 }
+    );
+  } catch {
+    // Continue anyway - slides may not have speaker notes
+  }
+
   await page.waitForFunction('() => document.readyState === "complete"');
 
   try {

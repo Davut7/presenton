@@ -74,6 +74,27 @@ from utils.schema_utils import (
 
 
 
+class _GoogleKeyRotator:
+    """Round-robin rotator for multiple Google API keys."""
+    _keys: list[str] = []
+    _index: int = 0
+
+    @classmethod
+    def init_keys(cls):
+        raw = get_google_api_key_env() or ""
+        cls._keys = [k.strip() for k in raw.split(",") if k.strip()]
+
+    @classmethod
+    def next_key(cls) -> str | None:
+        if not cls._keys:
+            cls.init_keys()
+        if not cls._keys:
+            return None
+        key = cls._keys[cls._index % len(cls._keys)]
+        cls._index += 1
+        return key
+
+
 class LLMClient:
     def __init__(self):
         self.llm_provider = get_llm_provider()
@@ -129,12 +150,13 @@ class LLMClient:
         return AsyncOpenAI()
 
     def _get_google_client(self):
-        if not get_google_api_key_env():
+        api_key = _GoogleKeyRotator.next_key()
+        if not api_key:
             raise HTTPException(
                 status_code=400,
                 detail="Google API Key is not set",
             )
-        return genai.Client()
+        return genai.Client(api_key=api_key)
 
     def _get_anthropic_client(self):
         if not get_anthropic_api_key_env():

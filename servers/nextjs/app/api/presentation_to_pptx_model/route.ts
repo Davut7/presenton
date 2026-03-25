@@ -254,6 +254,16 @@ async function getSlidesAndSpeakerNotes(page: Page) {
 }
 
 async function getSlidesWrapper(page: Page): Promise<ElementHandle<Element>> {
+  // Wait for slides to actually render (React SPA needs time after networkidle0)
+  try {
+    await page.waitForSelector(
+      "#presentation-slides-wrapper [data-speaker-note]",
+      { timeout: 60000 }
+    );
+  } catch {
+    // Fallback: check if wrapper exists at all
+  }
+
   const slides_wrapper = await page.$("#presentation-slides-wrapper");
   if (!slides_wrapper) {
     throw new ApiError("Presentation slides not found");

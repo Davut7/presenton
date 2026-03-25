@@ -57,6 +57,11 @@ WORKDIR /app
 COPY servers/fastapi/ ./servers/fastapi/
 COPY start.js LICENSE NOTICE ./
 
+# Pre-download ChromaDB ONNX embedding model into FastAPI working directory
+WORKDIR /app/servers/fastapi
+RUN python -c "from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2; ef = ONNXMiniLM_L6_V2(); ef.DOWNLOAD_PATH = 'chroma/models'; ef._download_model_if_not_exists()"
+WORKDIR /app
+
 # Copy nginx configuration
 COPY nginx.conf /etc/nginx/nginx.conf
 

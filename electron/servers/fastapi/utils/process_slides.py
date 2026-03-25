@@ -155,9 +155,11 @@ async def process_old_and_new_slides_and_fetch_assets(
     new_assets = []
 
     # Sets new image and icon urls for assets that were fetched
-    for i, new_image in enumerate(new_images):
-        if new_images_fetch_status[i]:
-            fetched_image = new_images[i]
+    fetch_image_idx = 0
+    for i, needs_fetch in enumerate(new_images_fetch_status):
+        if needs_fetch:
+            fetched_image = new_images[fetch_image_idx]
+            fetch_image_idx += 1
             if isinstance(fetched_image, ImageAsset):
                 new_assets.append(fetched_image)
                 image_url = fetched_image.file_url
@@ -165,14 +167,17 @@ async def process_old_and_new_slides_and_fetch_assets(
                 image_url = fetched_image
             new_image_dicts[i]["__image_url__"] = image_url
 
-    for i, new_icon in enumerate(new_icons):
-        if new_icons_fetch_status[i]:
-            icon_result = new_icons[i]
+    fetch_icon_idx = 0
+    for i, needs_fetch in enumerate(new_icons_fetch_status):
+        if needs_fetch:
+            icon_result = new_icons[fetch_icon_idx]
+            fetch_icon_idx += 1
             if icon_result and len(icon_result) > 0:
                 new_icon_dicts[i]["__icon_url__"] = icon_result[0]
             else:
                 # Fallback to placeholder if no icon found
-                new_icon_dicts[i]["__icon_url__"] = "/static/icons/placeholder.svg"
+                placeholder_path = get_resource_path(os.path.join("static", "icons", "placeholder.svg"))
+                new_icon_dicts[i]["__icon_url__"] = f"file://{placeholder_path}"
 
     for i, new_image_dict in enumerate(new_image_dicts):
         set_dict_at_path(new_slide_content, new_image_dict_paths[i], new_image_dict)
