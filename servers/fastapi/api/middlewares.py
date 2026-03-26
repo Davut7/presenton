@@ -24,12 +24,13 @@ class ApiKeyAuthMiddleware(BaseHTTPMiddleware):
             # No API_KEY set — auth disabled, allow all
             return await call_next(request)
 
-        # Allow internal requests (from Next.js / Puppeteer inside container)
-        client_host = request.client.host if request.client else ""
-        if client_host in ("127.0.0.1", "::1", "localhost"):
+        # Allow truly internal requests (no X-Forwarded-For = not proxied through nginx from outside)
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if not forwarded_for:
+            # Direct internal call (Next.js, Puppeteer) — not from nginx
             return await call_next(request)
 
-        # Check header or query param
+        # External request through nginx — require API key
         request_key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
         if request_key != api_key:
             return JSONResponse(
