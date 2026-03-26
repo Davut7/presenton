@@ -40,6 +40,7 @@ def get_messages(
                 - Mix text-heavy and visual-heavy slides naturally
                 - Use your judgment on when repetition serves the content
                 - Balance information density across slides
+                - **At least 50% of slides MUST use layouts that include images.** Prefer image-based layouts over text-only layouts when both are suitable.
 
                 3. **Audience experience**: Consider how slides work together
                 - Create natural transitions between topics
