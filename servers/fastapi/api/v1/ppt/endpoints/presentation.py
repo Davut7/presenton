@@ -186,6 +186,11 @@ async def prepare_presentation(
     if not presentation:
         raise HTTPException(status_code=404, detail="Presentation not found")
 
+    # Truncate outlines to requested slide count
+    max_slides = presentation.n_slides
+    if len(outlines) > max_slides:
+        outlines = outlines[:max_slides]
+
     presentation_outline_model = PresentationOutlineModel(slides=outlines)
 
     total_slide_layouts = len(layout.slides)
@@ -286,11 +291,14 @@ async def stream_presentation(
         async_assets_generation_tasks = []
 
         slides: List[SlideModel] = []
+        # Ensure we don't generate more slides than outlines
+        max_slides = min(len(structure.slides), len(outline.slides))
         yield SSEResponse(
             event="response",
             data=json.dumps({"type": "chunk", "chunk": '{ "slides": [ '}),
         ).to_string()
-        for i, slide_layout_index in enumerate(structure.slides):
+        for i in range(max_slides):
+            slide_layout_index = structure.slides[i]
             slide_layout = layout.slides[slide_layout_index]
 
             try:
@@ -577,7 +585,10 @@ async def generate_presentation_handler(
             presentation_outlines = PresentationOutlineModel(
                 **presentation_outlines_json
             )
-            total_outlines = n_slides_to_generate
+            # Truncate outlines to requested count (LLM may generate extras)
+            if len(presentation_outlines.slides) > n_slides_to_generate:
+                presentation_outlines.slides = presentation_outlines.slides[:n_slides_to_generate]
+            total_outlines = len(presentation_outlines.slides)
 
         else:
             # Setting outlines to slides markdown

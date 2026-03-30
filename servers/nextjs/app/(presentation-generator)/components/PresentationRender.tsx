@@ -35,7 +35,7 @@ const SlideScale = ({ slide }: { slide: any }) => {
     }, []);
     return (<div
         ref={containerRef}
-        className="relative w-full  shadow-md"
+        className="relative w-full mb-6 shadow-md"
     >
         <div
             className="relative mx-auto max-w-[1280px] "
