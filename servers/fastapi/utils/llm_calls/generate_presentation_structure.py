@@ -54,7 +54,7 @@ def get_messages(
 
                 User intruction should be taken into account while creating the presentation structure, except for number of slides.
 
-                Select layout index for each of the {n_slides} slides based on what will best serve the presentation's goals.
+                Select layout index for EXACTLY {n_slides} slides. Output exactly {n_slides} layout indices, no more, no less.
             """,
         ),
         LLMUserMessage(
@@ -85,7 +85,7 @@ def get_messages_for_slides_markdown(
 
                 User intruction should be taken into account while creating the presentation structure, except for number of slides.
 
-                Select layout index for each of the {n_slides} slides based on what will best serve the presentation's goals.
+                Select layout index for EXACTLY {n_slides} slides. Output exactly {n_slides} layout indices, no more, no less.
             """,
         ),
         LLMUserMessage(
@@ -130,6 +130,11 @@ async def generate_presentation_structure(
             response_format=response_model.model_json_schema(),
             strict=True,
         )
-        return PresentationStructureModel(**response)
+        result = PresentationStructureModel(**response)
+        # Hard truncate to requested count
+        n_slides = len(presentation_outline.slides)
+        if len(result.slides) > n_slides:
+            result.slides = result.slides[:n_slides]
+        return result
     except Exception as e:
         raise handle_llm_client_exceptions(e)

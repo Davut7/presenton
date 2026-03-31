@@ -34,7 +34,7 @@ class GeneratePresentationRequest(BaseModel):
     files: Optional[List[str]] = Field(
         default=None, description="Files to use for the presentation"
     )
-    export_as: Literal["pptx", "pdf"] = Field(
+    export_as: Literal["pptx"] = Field(
         default="pptx", description="Export format"
     )
     trigger_webhook: bool = Field(

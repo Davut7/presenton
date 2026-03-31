@@ -445,7 +445,7 @@ async def export_presentation_as_pptx(
 async def export_presentation_as_pptx_or_pdf(
     id: Annotated[uuid.UUID, Body(description="Presentation ID to export")],
     export_as: Annotated[
-        Literal["pptx", "pdf"], Body(description="Format to export the presentation as")
+        Literal["pptx"], Body(description="Format to export the presentation as")
     ] = "pptx",
     sql_session: AsyncSession = Depends(get_async_session),
 ):
