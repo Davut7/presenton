@@ -70,6 +70,20 @@ import uuid
 
 PRESENTATION_ROUTER = APIRouter(prefix="/presentation", tags=["Presentation"])
 
+# Global progress tracker for SSE streaming
+_progress_queues: dict[str, asyncio.Queue] = {}
+
+
+def _notify_progress(task_id: str, percent: int, message: str, status: str = "in_progress", data: dict = None):
+    """Send progress update to SSE listeners."""
+    if task_id in _progress_queues:
+        _progress_queues[task_id].put_nowait({
+            "percent": min(percent, 100),
+            "message": message,
+            "status": status,
+            "data": data,
+        })
+
 
 @PRESENTATION_ROUTER.get("/all", response_model=List[PresentationWithSlides])
 async def get_all_presentations(sql_session: AsyncSession = Depends(get_async_session)):
@@ -515,6 +529,15 @@ async def generate_presentation_handler(
     async_status: Optional[AsyncPresentationGenerationTaskModel],
     sql_session: AsyncSession = Depends(get_async_session),
 ):
+    task_id = async_status.id if async_status else None
+
+    def _progress(percent: int, message: str, status: str = "in_progress", data: dict = None):
+        if async_status:
+            async_status.message = message
+            async_status.updated_at = datetime.now()
+        if task_id:
+            _notify_progress(task_id, percent, message, status, data)
+
     try:
         using_slides_markdown = False
 
@@ -526,9 +549,8 @@ async def generate_presentation_handler(
             additional_context = ""
 
             # Updating async status
+            _progress(random.randint(3, 8), "Generating presentation outlines")
             if async_status:
-                async_status.message = "Generating presentation outlines"
-                async_status.updated_at = datetime.now()
                 sql_session.add(async_status)
                 await sql_session.commit()
 
@@ -601,9 +623,8 @@ async def generate_presentation_handler(
             total_outlines = len(request.slides_markdown)
 
         # Updating async status
+        _progress(random.randint(15, 25), "Selecting layout for each slide")
         if async_status:
-            async_status.message = "Selecting layout for each slide"
-            async_status.updated_at = datetime.now()
             sql_session.add(async_status)
             await sql_session.commit()
 
@@ -688,10 +709,8 @@ async def generate_presentation_handler(
             instructions=request.instructions,
         )
 
-        # Updating async status
+        _progress(random.randint(28, 35), "Generating slides")
         if async_status:
-            async_status.message = "Generating slides"
-            async_status.updated_at = datetime.now()
             sql_session.add(async_status)
             await sql_session.commit()
 
@@ -725,6 +744,11 @@ async def generate_presentation_handler(
             ]
             batch_results = await asyncio.gather(*content_tasks, return_exceptions=True)
 
+            # Progress: 35-75% for slide generation
+            slides_done = min(end, len(slide_layouts))
+            slide_progress = 35 + int((slides_done / len(slide_layouts)) * 40)
+            _progress(slide_progress, f"Generated {slides_done}/{len(slide_layouts)} slides")
+
             # Build slides for this batch (skip failed slides)
             batch_slides: List[SlideModel] = []
             for offset, slide_result in enumerate(batch_results):
@@ -752,9 +776,8 @@ async def generate_presentation_handler(
             ]
             async_assets_generation_tasks.extend(asset_tasks)
 
+        _progress(random.randint(76, 82), "Fetching images and assets")
         if async_status:
-            async_status.message = "Fetching assets for slides"
-            async_status.updated_at = datetime.now()
             sql_session.add(async_status)
             await sql_session.commit()
 
@@ -770,9 +793,8 @@ async def generate_presentation_handler(
         sql_session.add_all(generated_assets)
         await sql_session.commit()
 
+        _progress(random.randint(85, 92), "Exporting presentation")
         if async_status:
-            async_status.message = "Exporting presentation"
-            async_status.updated_at = datetime.now()
             sql_session.add(async_status)
 
         # 9. Export
@@ -785,11 +807,10 @@ async def generate_presentation_handler(
             edit_path=f"/presentation?id={presentation_id}",
         )
 
+        _progress(100, "Presentation generation completed", "completed", response.model_dump(mode="json"))
         if async_status:
-            async_status.message = "Presentation generation completed"
             async_status.status = "completed"
             async_status.data = response.model_dump(mode="json")
-            async_status.updated_at = datetime.now()
             sql_session.add(async_status)
             await sql_session.commit()
 
@@ -817,6 +838,8 @@ async def generate_presentation_handler(
             WebhookEvent.PRESENTATION_GENERATION_FAILED,
             api_error_model.model_dump(mode="json"),
         )
+
+        _progress(0, "Presentation generation failed", "error")
 
         if async_status:
             async_status.status = "error"
@@ -894,6 +917,61 @@ async def check_async_presentation_generation_status(
             status_code=404, detail="No presentation generation task found"
         )
     return status
+
+
+@PRESENTATION_ROUTER.get("/task/{id}/stream")
+async def stream_task_progress(
+    id: str = Path(description="ID of the presentation generation task"),
+    sql_session: AsyncSession = Depends(get_async_session),
+):
+    """SSE endpoint that streams progress updates for an async task."""
+    status = await sql_session.get(AsyncPresentationGenerationTaskModel, id)
+    if not status:
+        raise HTTPException(status_code=404, detail="No presentation generation task found")
+
+    # If already completed or failed, return final state immediately
+    if status.status in ("completed", "error"):
+        async def done_stream():
+            event_data = {
+                "percent": 100 if status.status == "completed" else 0,
+                "message": status.message or "",
+                "status": status.status,
+                "data": status.data,
+                "error": status.error,
+            }
+            yield f"data: {json.dumps(event_data)}\n\n"
+        return StreamingResponse(done_stream(), media_type="text/event-stream")
+
+    # Create queue for this task
+    queue: asyncio.Queue = asyncio.Queue()
+    _progress_queues[id] = queue
+
+    async def event_stream():
+        try:
+            while True:
+                try:
+                    update = await asyncio.wait_for(queue.get(), timeout=2.0)
+                    yield f"data: {json.dumps(update)}\n\n"
+                    if update.get("status") in ("completed", "error"):
+                        break
+                except asyncio.TimeoutError:
+                    # Send keepalive and check DB for status
+                    refreshed = await sql_session.get(AsyncPresentationGenerationTaskModel, id)
+                    if refreshed and refreshed.status in ("completed", "error"):
+                        event_data = {
+                            "percent": 100 if refreshed.status == "completed" else 0,
+                            "message": refreshed.message or "",
+                            "status": refreshed.status,
+                            "data": refreshed.data,
+                            "error": refreshed.error,
+                        }
+                        yield f"data: {json.dumps(event_data)}\n\n"
+                        break
+                    yield f": keepalive\n\n"
+        finally:
+            _progress_queues.pop(id, None)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @PRESENTATION_ROUTER.post("/edit", response_model=PresentationPathAndEditPath)

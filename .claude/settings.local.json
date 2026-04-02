@@ -13,7 +13,8 @@
       "Bash(for id:*)",
       "Bash(do echo:*)",
       "Bash(kill %1)",
-      "Bash(docker exec:*)"
+      "Bash(docker exec:*)",
+      "Bash(python -c \"from api.v1.ppt.endpoints.presentation import PRESENTATION_ROUTER; print\\('OK'\\)\")"
     ]
   }
 }
