@@ -134,7 +134,8 @@ const PresentationPage = ({ presentation_id }: { presentation_id: string }) => {
         <div className="">
           <div
             id="presentation-slides-wrapper"
-            className="mx-auto flex flex-col items-center  overflow-hidden  justify-center   "
+            className="flex flex-col items-start"
+            style={{ width: 1280 }}
           >
             {!presentationData ||
 
@@ -158,8 +159,8 @@ const PresentationPage = ({ presentation_id }: { presentation_id: string }) => {
                   presentationData.slides.length > 0 &&
                   presentationData.slides.map((slide: any, index: number) => (
                     // [data-speaker-note] is used to extract the speaker note from the slide for export to pptx
-                    <div key={index} className="w-full" data-speaker-note={slide.speaker_note}>
-                      <V1ContentRender slide={slide} isEditMode={true} theme={null}
+                    <div key={index} className="w-full" style={{ width: 1280, height: 720 }} data-speaker-note={slide.speaker_note}>
+                      <V1ContentRender slide={slide} isEditMode={false} theme={null}
                       />
                     </div>
                   ))}
