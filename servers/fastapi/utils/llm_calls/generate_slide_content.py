@@ -137,13 +137,16 @@ async def get_slide_content_from_type_and_outline(
         f"get_slide_content_from_type_and_outline: model={model} outline_len={len(outline.content or '')} language={language}"
     )
     import asyncio, random
+    from constants.llm import FALLBACK_GOOGLE_MODEL
 
-    max_retries = 5
+    max_retries = 10
+    fallback_after = 5
+    current_model = model
     for attempt in range(max_retries):
         try:
             client = LLMClient()
             response = await client.generate_structured(
-                model=model,
+                model=current_model,
                 messages=messages,
                 response_format=response_schema,
                 strict=False,
@@ -154,7 +157,7 @@ async def get_slide_content_from_type_and_outline(
             if response is not None:
                 return response
             if attempt < max_retries - 1:
-                wait_time = 2 ** attempt + random.uniform(0, 1)
+                wait_time = min(2 ** attempt + random.uniform(0, 1), 30)
                 print(f"get_slide_content_from_type_and_outline: empty response, retrying in {wait_time:.1f}s (attempt {attempt+1}/{max_retries})")
                 await asyncio.sleep(wait_time)
                 continue
@@ -171,7 +174,10 @@ async def get_slide_content_from_type_and_outline(
                 or "decode" in error_msg
             )
             if is_retryable and attempt < max_retries - 1:
-                wait_time = 2 ** attempt + random.uniform(0, 1)
+                if attempt + 1 >= fallback_after and current_model != FALLBACK_GOOGLE_MODEL:
+                    print(f"Slide content: switching to fallback model {FALLBACK_GOOGLE_MODEL} after {attempt + 1} failures")
+                    current_model = FALLBACK_GOOGLE_MODEL
+                wait_time = min(2 ** attempt + random.uniform(0, 1), 30)
                 print(f"get_slide_content_from_type_and_outline: {e}, retrying in {wait_time:.1f}s")
                 await asyncio.sleep(wait_time)
                 continue

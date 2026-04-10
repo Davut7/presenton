@@ -98,8 +98,11 @@ async def generate_ppt_outline(
     response_model = get_presentation_outline_model_with_n_slides(n_slides)
 
     import asyncio, random
+    from constants.llm import FALLBACK_GOOGLE_MODEL
 
-    max_retries = 5
+    max_retries = 10
+    fallback_after = 5
+    current_model = model
     messages = get_messages(
         content, n_slides, language, additional_context,
         tone, verbosity, instructions, include_title_slide,
@@ -110,7 +113,7 @@ async def generate_ppt_outline(
         client = LLMClient()
         try:
             async for chunk in client.stream_structured(
-                model,
+                current_model,
                 messages,
                 schema,
                 strict=True,
@@ -129,6 +132,9 @@ async def generate_ppt_outline(
                 or "high demand" in error_msg or "service unavailable" in error_msg
             )
             if is_retryable and attempt < max_retries - 1:
+                if attempt + 1 >= fallback_after and current_model != FALLBACK_GOOGLE_MODEL:
+                    print(f"Outline: switching to fallback model {FALLBACK_GOOGLE_MODEL} after {attempt + 1} failures")
+                    current_model = FALLBACK_GOOGLE_MODEL
                 wait_time = min(2 ** attempt + random.uniform(0, 1), 30)
                 print(f"Outline generation failed (attempt {attempt + 1}/{max_retries}): retrying in {wait_time:.1f}s")
                 await asyncio.sleep(wait_time)

@@ -102,33 +102,59 @@ async def generate_presentation_structure(
     using_slides_markdown: bool = False,
 ) -> PresentationStructureModel:
 
-    client = LLMClient()
+    import asyncio, random
+    from constants.llm import FALLBACK_GOOGLE_MODEL
+
     model = get_model()
     response_model = get_presentation_structure_model_with_n_slides(
         len(presentation_outline.slides)
     )
 
-    try:
-        response = await client.generate_structured(
-            model=model,
-            messages=(
-                get_messages_for_slides_markdown(
-                    presentation_layout,
-                    len(presentation_outline.slides),
-                    presentation_outline.to_string(),
-                    instructions,
-                )
-                if using_slides_markdown
-                else get_messages(
-                    presentation_layout,
-                    len(presentation_outline.slides),
-                    presentation_outline.to_string(),
-                    instructions,
-                )
-            ),
-            response_format=response_model.model_json_schema(),
-            strict=True,
+    max_retries = 10
+    fallback_after = 5
+    current_model = model
+    messages = (
+        get_messages_for_slides_markdown(
+            presentation_layout,
+            len(presentation_outline.slides),
+            presentation_outline.to_string(),
+            instructions,
         )
-        return PresentationStructureModel(**response)
-    except Exception as e:
-        raise handle_llm_client_exceptions(e)
+        if using_slides_markdown
+        else get_messages(
+            presentation_layout,
+            len(presentation_outline.slides),
+            presentation_outline.to_string(),
+            instructions,
+        )
+    )
+
+    for attempt in range(max_retries):
+        try:
+            client = LLMClient()
+            response = await client.generate_structured(
+                model=current_model,
+                messages=messages,
+                response_format=response_model.model_json_schema(),
+                strict=True,
+            )
+            result = PresentationStructureModel(**response)
+            n_slides = len(presentation_outline.slides)
+            if len(result.slides) > n_slides:
+                result.slides = result.slides[:n_slides]
+            return result
+        except Exception as e:
+            error_msg = str(e).lower()
+            is_retryable = (
+                "503" in error_msg or "429" in error_msg
+                or "high demand" in error_msg or "service unavailable" in error_msg
+            )
+            if is_retryable and attempt < max_retries - 1:
+                if attempt + 1 >= fallback_after and current_model != FALLBACK_GOOGLE_MODEL:
+                    print(f"Structure: switching to fallback model {FALLBACK_GOOGLE_MODEL} after {attempt + 1} failures")
+                    current_model = FALLBACK_GOOGLE_MODEL
+                wait_time = min(2 ** attempt + random.uniform(0, 1), 30)
+                print(f"Structure generation failed (attempt {attempt + 1}/{max_retries}): retrying in {wait_time:.1f}s")
+                await asyncio.sleep(wait_time)
+                continue
+            raise handle_llm_client_exceptions(e)

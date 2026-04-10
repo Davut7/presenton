@@ -107,7 +107,7 @@ class LLMClient:
         num_keys = max(len(_GoogleKeyRotator._keys), 1) if self.llm_provider == LLMProvider.GOOGLE else 1
         self._rate_limiter = asyncio.Semaphore(5 * num_keys)
 
-    async def _call_with_retry(self, func, *args, max_retries=5, **kwargs):
+    async def _call_with_retry(self, func, *args, max_retries=10, **kwargs):
         """
         Retry wrapper with exponential backoff for API calls.
         Handles 503 (Service Unavailable) and 429 (Rate Limit) errors.
@@ -130,8 +130,8 @@ class LLMClient:
                     if not is_retryable or attempt == max_retries - 1:
                         raise
 
-                    # Exponential backoff: 2^attempt + random jitter
-                    wait_time = (2 ** attempt) + random.uniform(0, 1)
+                    # Exponential backoff: 2^attempt + random jitter, capped at 30s
+                    wait_time = min((2 ** attempt) + random.uniform(0, 1), 30)
                     print(f"API call failed (attempt {attempt + 1}/{max_retries}): {e}")
                     print(f"Retrying in {wait_time:.2f} seconds...")
                     await asyncio.sleep(wait_time)
@@ -2093,11 +2093,14 @@ class LLMClient:
         parsed_messages = self._get_google_messages(messages)
 
         # Retry logic for 503/429 errors in streaming
-        max_retries = 5
+        from constants.llm import FALLBACK_GOOGLE_MODEL
+        max_retries = 10
+        fallback_after = 5  # Switch to fallback model after this many failures
+        current_model = model
         for attempt in range(max_retries):
             try:
                 stream_iterator = iterator_to_async(client.models.generate_content_stream)(
-                    model=model,
+                    model=current_model,
                     contents=parsed_messages,
                     config=GenerateContentConfig(
                         tools=google_tools,
@@ -2126,6 +2129,10 @@ class LLMClient:
                     or "rate limit" in error_message
                 )
                 if is_retryable and attempt < max_retries - 1:
+                    # Switch to fallback model after several failures
+                    if attempt + 1 >= fallback_after and current_model != FALLBACK_GOOGLE_MODEL:
+                        print(f"Switching to fallback model {FALLBACK_GOOGLE_MODEL} after {attempt + 1} failures")
+                        current_model = FALLBACK_GOOGLE_MODEL
                     wait_time = min(2 ** attempt + random.uniform(0, 1), 30)
                     print(f"Stream API call failed (attempt {attempt + 1}/{max_retries}): {str(e)[:100]}. Retrying in {wait_time:.1f}s")
                     await asyncio.sleep(wait_time)

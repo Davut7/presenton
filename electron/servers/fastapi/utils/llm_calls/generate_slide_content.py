@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Optional
+from fastapi import HTTPException
 from models.llm_message import LLMSystemMessage, LLMUserMessage
 from models.presentation_layout import SlideLayoutModel
 from models.presentation_outline_model import SlideOutlineModel
@@ -125,20 +126,47 @@ async def get_slide_content_from_type_and_outline(
         True,
     )
 
-    try:
-        response = await client.generate_structured(
-            model=model,
-            messages=get_messages(
-                outline.content,
-                language,
-                tone,
-                verbosity,
-                instructions,
-            ),
-            response_format=response_schema,
-            strict=False,
-        )
-        return response
+    import asyncio, random
+    from constants.llm import FALLBACK_GOOGLE_MODEL
 
-    except Exception as e:
-        raise handle_llm_client_exceptions(e)
+    max_retries = 10
+    fallback_after = 5
+    current_model = model
+    messages = get_messages(outline.content, language, tone, verbosity, instructions)
+
+    for attempt in range(max_retries):
+        try:
+            client = LLMClient()
+            response = await client.generate_structured(
+                model=current_model,
+                messages=messages,
+                response_format=response_schema,
+                strict=False,
+            )
+            if response is not None:
+                return response
+            if attempt < max_retries - 1:
+                wait_time = min(2 ** attempt + random.uniform(0, 1), 30)
+                await asyncio.sleep(wait_time)
+                continue
+            raise HTTPException(status_code=500, detail="LLM returned empty response after retries")
+
+        except Exception as e:
+            error_msg = str(e).lower()
+            is_retryable = (
+                "503" in error_msg or "429" in error_msg
+                or "high demand" in error_msg
+                or "unterminated" in error_msg
+                or "expecting" in error_msg
+                or "invalid" in error_msg and "json" in error_msg
+                or "decode" in error_msg
+            )
+            if is_retryable and attempt < max_retries - 1:
+                if attempt + 1 >= fallback_after and current_model != FALLBACK_GOOGLE_MODEL:
+                    print(f"Slide content: switching to fallback model {FALLBACK_GOOGLE_MODEL} after {attempt + 1} failures")
+                    current_model = FALLBACK_GOOGLE_MODEL
+                wait_time = min(2 ** attempt + random.uniform(0, 1), 30)
+                print(f"get_slide_content_from_type_and_outline: {e}, retrying in {wait_time:.1f}s")
+                await asyncio.sleep(wait_time)
+                continue
+            raise handle_llm_client_exceptions(e)
