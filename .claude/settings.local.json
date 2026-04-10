@@ -18,7 +18,12 @@
       "Bash(ping -c 2 -W 3 34.135.241.242)",
       "Bash(find:*)",
       "Bash(grep:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(export APP_DATA_DIRECTORY=/tmp/app_data TEMP_DIRECTORY=/tmp/presenton DISABLE_IMAGE_GENERATION=true)",
+      "Bash(pip3 install:*)",
+      "Bash(ls /Users/macbookpro/Desktop/projects/presenton/servers/fastapi/requirements*.txt /Users/macbookpro/Desktop/projects/presenton/requirements*.txt)",
+      "Bash(export APP_DATA_DIRECTORY=/tmp/app_data TEMP_DIRECTORY=/tmp/presenton DISABLE_IMAGE_GENERATION=true LLM=google)",
+      "Bash(APP_DATA_DIRECTORY=/tmp/app_data TEMP_DIRECTORY=/tmp/presenton DISABLE_IMAGE_GENERATION=true LLM=google python3:*)"
     ]
   }
 }

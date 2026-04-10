@@ -2093,14 +2093,12 @@ class LLMClient:
         parsed_messages = self._get_google_messages(messages)
 
         # Retry logic for 503/429 errors in streaming
-        from constants.llm import FALLBACK_GOOGLE_MODEL
-        max_retries = 10
-        fallback_after = 5  # Switch to fallback model after this many failures
-        current_model = model
+        # NOTE: fallback model switching is handled by callers (generate_ppt_outline, etc.)
+        max_retries = 3
         for attempt in range(max_retries):
             try:
                 stream_iterator = iterator_to_async(client.models.generate_content_stream)(
-                    model=current_model,
+                    model=model,
                     contents=parsed_messages,
                     config=GenerateContentConfig(
                         tools=google_tools,
@@ -2122,23 +2120,14 @@ class LLMClient:
                 break  # Successfully created stream
             except Exception as e:
                 error_message = str(e).lower()
-                # If fallback model is not available, revert to primary
-                if "404" in error_message and current_model == FALLBACK_GOOGLE_MODEL:
-                    print(f"Fallback model {FALLBACK_GOOGLE_MODEL} not available, reverting to {model}")
-                    current_model = model
                 is_retryable = (
                     "503" in error_message or "429" in error_message
                     or "service unavailable" in error_message
                     or "high demand" in error_message
                     or "rate limit" in error_message
-                    or "404" in error_message
                 )
                 if is_retryable and attempt < max_retries - 1:
-                    # Switch to fallback model after several failures
-                    if attempt + 1 >= fallback_after and current_model != FALLBACK_GOOGLE_MODEL and "404" not in error_message:
-                        print(f"Switching to fallback model {FALLBACK_GOOGLE_MODEL} after {attempt + 1} failures")
-                        current_model = FALLBACK_GOOGLE_MODEL
-                    wait_time = min(2 ** attempt + random.uniform(0, 1), 30)
+                    wait_time = min(2 ** attempt + random.uniform(0, 1), 10)
                     print(f"Stream API call failed (attempt {attempt + 1}/{max_retries}): {str(e)[:100]}. Retrying in {wait_time:.1f}s")
                     await asyncio.sleep(wait_time)
                     # Rotate to next API key on retry
