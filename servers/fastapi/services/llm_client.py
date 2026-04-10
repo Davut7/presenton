@@ -2122,15 +2122,20 @@ class LLMClient:
                 break  # Successfully created stream
             except Exception as e:
                 error_message = str(e).lower()
+                # If fallback model is not available, revert to primary
+                if "404" in error_message and current_model == FALLBACK_GOOGLE_MODEL:
+                    print(f"Fallback model {FALLBACK_GOOGLE_MODEL} not available, reverting to {model}")
+                    current_model = model
                 is_retryable = (
                     "503" in error_message or "429" in error_message
                     or "service unavailable" in error_message
                     or "high demand" in error_message
                     or "rate limit" in error_message
+                    or "404" in error_message
                 )
                 if is_retryable and attempt < max_retries - 1:
                     # Switch to fallback model after several failures
-                    if attempt + 1 >= fallback_after and current_model != FALLBACK_GOOGLE_MODEL:
+                    if attempt + 1 >= fallback_after and current_model != FALLBACK_GOOGLE_MODEL and "404" not in error_message:
                         print(f"Switching to fallback model {FALLBACK_GOOGLE_MODEL} after {attempt + 1} failures")
                         current_model = FALLBACK_GOOGLE_MODEL
                     wait_time = min(2 ** attempt + random.uniform(0, 1), 30)

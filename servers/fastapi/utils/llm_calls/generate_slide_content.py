@@ -165,6 +165,9 @@ async def get_slide_content_from_type_and_outline(
 
         except Exception as e:
             error_msg = str(e).lower()
+            if "404" in error_msg and current_model == FALLBACK_GOOGLE_MODEL:
+                print(f"Fallback model {FALLBACK_GOOGLE_MODEL} not available, reverting to {model}")
+                current_model = model
             is_retryable = (
                 "503" in error_msg or "429" in error_msg
                 or "high demand" in error_msg
@@ -172,9 +175,10 @@ async def get_slide_content_from_type_and_outline(
                 or "expecting" in error_msg
                 or "invalid" in error_msg and "json" in error_msg
                 or "decode" in error_msg
+                or "404" in error_msg
             )
             if is_retryable and attempt < max_retries - 1:
-                if attempt + 1 >= fallback_after and current_model != FALLBACK_GOOGLE_MODEL:
+                if attempt + 1 >= fallback_after and current_model != FALLBACK_GOOGLE_MODEL and "404" not in error_msg:
                     print(f"Slide content: switching to fallback model {FALLBACK_GOOGLE_MODEL} after {attempt + 1} failures")
                     current_model = FALLBACK_GOOGLE_MODEL
                 wait_time = min(2 ** attempt + random.uniform(0, 1), 30)
