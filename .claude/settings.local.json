@@ -14,7 +14,8 @@
       "Bash(do echo:*)",
       "Bash(kill %1)",
       "Bash(docker exec:*)",
-      "Bash(python -c \"from api.v1.ppt.endpoints.presentation import PRESENTATION_ROUTER; print\\('OK'\\)\")"
+      "Bash(python -c \"from api.v1.ppt.endpoints.presentation import PRESENTATION_ROUTER; print\\('OK'\\)\")",
+      "Bash(ping -c 2 -W 3 34.135.241.242)"
     ]
   }
 }
