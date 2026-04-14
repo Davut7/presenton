@@ -926,27 +926,44 @@ class LLMClient:
                 )
             )
 
-        response = await self._call_with_retry(
-            client.models.generate_content,
-            model=model,
-            contents=self._get_google_messages(messages),
-            config=GenerateContentConfig(
-                tools=google_tools,
-                tool_config=(
-                    GoogleToolConfig(
-                        function_calling_config=GoogleFunctionCallingConfig(
-                            mode=GoogleFunctionCallingConfigMode.ANY,
-                        ),
-                    )
-                    if tools
-                    else None
+        try:
+            response = await self._call_with_retry(
+                client.models.generate_content,
+                model=model,
+                contents=self._get_google_messages(messages),
+                config=GenerateContentConfig(
+                    tools=google_tools,
+                    tool_config=(
+                        GoogleToolConfig(
+                            function_calling_config=GoogleFunctionCallingConfig(
+                                mode=GoogleFunctionCallingConfigMode.ANY,
+                            ),
+                        )
+                        if tools
+                        else None
+                    ),
+                    system_instruction=self._get_system_prompt(messages),
+                    response_mime_type="application/json" if not tools else None,
+                    response_json_schema=response_format if not tools else None,
+                    max_output_tokens=max_tokens,
                 ),
-                system_instruction=self._get_system_prompt(messages),
-                response_mime_type="application/json" if not tools else None,
-                response_json_schema=response_format if not tools else None,
-                max_output_tokens=max_tokens,
-            ),
-        )
+            )
+        except Exception as e:
+            error_msg = str(e).lower()
+            if "too many states" in error_msg or ("400" in error_msg and "invalid_argument" in error_msg):
+                print(f"Schema too complex for Gemini, retrying without strict schema validation")
+                response = await self._call_with_retry(
+                    client.models.generate_content,
+                    model=model,
+                    contents=self._get_google_messages(messages),
+                    config=GenerateContentConfig(
+                        system_instruction=self._get_system_prompt(messages),
+                        response_mime_type="application/json",
+                        max_output_tokens=max_tokens,
+                    ),
+                )
+            else:
+                raise
 
         if not response.candidates or not response.candidates[0].content:
             return None

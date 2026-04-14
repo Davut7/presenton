@@ -576,34 +576,41 @@ async def generate_presentation_handler(
                     (request.n_slides - needed_toc_count) / 10
                 )
 
-            presentation_outlines_text = ""
-            async for chunk in generate_ppt_outline(
-                request.content,
-                n_slides_to_generate,
-                request.language,
-                additional_context,
-                request.tone.value,
-                request.verbosity.value,
-                request.instructions,
-                request.include_title_slide,
-                request.web_search,
-            ):
+            outline_parse_retries = 3
+            presentation_outlines_json = None
+            for outline_attempt in range(outline_parse_retries):
+                presentation_outlines_text = ""
+                async for chunk in generate_ppt_outline(
+                    request.content,
+                    n_slides_to_generate,
+                    request.language,
+                    additional_context,
+                    request.tone.value,
+                    request.verbosity.value,
+                    request.instructions,
+                    request.include_title_slide,
+                    request.web_search,
+                ):
 
-                if isinstance(chunk, HTTPException):
-                    raise chunk
+                    if isinstance(chunk, HTTPException):
+                        raise chunk
 
-                presentation_outlines_text += chunk
+                    presentation_outlines_text += chunk
 
-            try:
-                presentation_outlines_json = dict(
-                    dirtyjson.loads(presentation_outlines_text)
-                )
-            except Exception:
-                traceback.print_exc()
-                raise HTTPException(
-                    status_code=400,
-                    detail="Failed to generate presentation outlines. Please try again.",
-                )
+                try:
+                    presentation_outlines_json = dict(
+                        dirtyjson.loads(presentation_outlines_text)
+                    )
+                    break  # Successfully parsed
+                except Exception:
+                    if outline_attempt < outline_parse_retries - 1:
+                        print(f"Outline JSON parse failed (attempt {outline_attempt + 1}/{outline_parse_retries}), regenerating...")
+                        continue
+                    traceback.print_exc()
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Failed to generate presentation outlines. Please try again.",
+                    )
             presentation_outlines = PresentationOutlineModel(
                 **presentation_outlines_json
             )
