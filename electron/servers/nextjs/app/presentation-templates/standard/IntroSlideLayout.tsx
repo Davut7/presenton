@@ -71,17 +71,6 @@ const Schema = z.object({
         description: "Paragraph text block. Max 20 words",
     }),
 
-    introCard: z.object({
-        enabled: z.boolean().default(false).meta({ description: "Show intro card with name and date" }),
-        initials: z.string().min(2).max(3).default("PDT").meta({ description: "Initials inside the circle" }),
-        name: z.string().min(3).max(40).default("Pitch Deck Team").meta({ description: "Display name" }),
-        date: z.string().min(6).max(40).default("December 22, 2025").meta({ description: "Display date string" }),
-    }).default({
-        enabled: true,
-        initials: "PDT",
-        name: "Pitch Deck Team",
-        date: "December 22, 2025",
-    }),
 }).meta({
     maxWords: 460,
 })
@@ -140,17 +129,6 @@ const dynamicSlideLayout: React.FC<LayoutProps> = ({ data: slideData }) => {
                                 {slideData?.paragraph || "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris"}
                             </p>
 
-                            {slideData?.introCard?.enabled ? (
-                                <div className="mt-10 inline-flex items-center gap-4 border px-5 py-3 shadow-[0_10px_24px_rgba(0,0,0,0.08)] min-w-[400px]" style={{ backgroundColor: 'var(--card-color, #FFFFFF)', borderColor: 'var(--stroke, #E5E7EB)' }}>
-                                    <div className="w-16 h-16 rounded-full flex items-center justify-center" style={{ backgroundColor: 'var(--primary-color, #1B8C2D)' }}>
-                                        <span className="text-white text-[22px] font-bold tracking-wide" style={{ color: 'var(--primary-text, #FFFFFF)' }}>{slideData?.introCard?.initials}</span>
-                                    </div>
-                                    <div className="leading-tight">
-                                        <div className="text-[22px] font-semibold" style={{ fontFamily: 'Playfair Display', color: 'var(--background-text, #111827)' }}>{slideData?.introCard?.name}</div>
-                                        <div className="text-[15px]" style={{ fontFamily: 'Playfair Display', color: 'var(--background-text, #1B8C2D)' }}>{slideData?.introCard?.date}</div>
-                                    </div>
-                                </div>
-                            ) : null}
                         </div>
                     </div>
                 </div>

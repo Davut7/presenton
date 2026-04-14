@@ -18,14 +18,6 @@ const introPitchDeckSchema = z.object({
     .meta({
       description: "Description shown below the title",
     }),
-  introCard: z
-    .object({
-      enabled: z.boolean().default(true),
-      name: z.string().min(1).max(60).default("John Doe"),
-      date: z.string().min(1).max(60).default("December 2025"),
-    })
-    .default({ enabled: true, name: "John Doe", date: "December 2025" })
-    .meta({ description: "Optional intro card shown below description" }),
   image: ImageSchema.default({
     __image_url__:
       "https://images.unsplash.com/photo-1500530855697-b586d89ba3ee?q=80&w=1600&auto=format&fit=crop",
@@ -108,17 +100,6 @@ const IntroPitchDeckSlide: React.FC<IntroSlideLayoutProps> = ({
           <p className="text-lg leading-relaxed font-normal mt-6 max-w-xl" style={{ color: 'var(--background-text, #234CD9)' }}>
             {slideData?.description}
           </p>
-          {slideData?.introCard?.enabled && (
-            <div className="mt-6 inline-flex items-center gap-4 rounded-lg px-5 py-4 shadow-sm min-w-[400px]" style={{ backgroundColor: 'var(--card-color, #FFFFFF)', border: '1px solid var(--stroke, #E5E7EB)' }}>
-              <div className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold" style={{ backgroundColor: 'var(--primary-color, #F5F8FE)', color: 'var(--primary-text, #234CD9)' }}>
-                {(slideData?.introCard?.name || "").split(" ").map(p => p.charAt(0)).join("").slice(0, 2).toUpperCase()}
-              </div>
-              <div className="flex flex-col">
-                <div className="text-[16px] font-semibold" style={{ color: 'var(--background-text, #234CD9)' }}>{slideData?.introCard?.name}</div>
-                <div className="text-[14px]" style={{ color: 'var(--background-text, #234CD9)' }}>{slideData?.introCard?.date}</div>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Right Image */}

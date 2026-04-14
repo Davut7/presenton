@@ -43,14 +43,6 @@ const Schema = z
       .max(60)
       .default("www.yourwebsite.com"),
 
-    introCard: z
-      .object({
-        enabled: z.boolean().default(false),
-        name: z.string().min(3).max(40).default("John Doe"),
-        date: z.string().min(4).max(40).default("Jan 1, 2025"),
-      })
-      .default({ enabled: true, name: "John Doe", date: "Jan 1, 2025" }),
-
     media: z
       .object({
         type: z.literal("image").default("image"),
@@ -65,7 +57,6 @@ const Schema = z
     paragraph:
       "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
     website: "www.yourwebsite.com",
-    introCard: { enabled: true, name: "John Doe", date: "Jan 1, 2025" },
     media: { type: "image", image: ImageSchema.parse({}) },
   })
 
@@ -130,29 +121,6 @@ const IntroSlideLayout: React.FC<SlideLayoutProps> = ({ data: slideData }) => {
               {slideData?.title}
             </h1>
             <p className="mt-5 text-[16px] leading-[1.6] max-w-[620px] " style={{ color: "var(--background-text, #6B7280)" }}>{slideData?.paragraph}</p>
-
-            {slideData?.introCard?.enabled && (
-              <div
-                className="mt-6 inline-flex items-center gap-4 rounded-sm border px-4 py-3 "
-                style={{
-                  borderColor: 'var(--primary-color, #BFF4FF)',
-                  backgroundColor: 'var(--primary-color, #BFF4FF)'
-                }}
-              >
-                <div
-                  className="w-2 h-6"
-                  style={{ backgroundColor: 'var(--primary-text, #111827)' }}
-                ></div>
-                <div className="flex items-baseline gap-3">
-                  <span className="text-[16px] font-semibold" style={{ color: 'var(--primary-text, #111827)' }}>
-                    {slideData?.introCard?.name}
-                  </span>
-                  <span className="text-[14px]" style={{ color: 'var(--primary-text, #6B7280)' }}>
-                    {slideData?.introCard?.date}
-                  </span>
-                </div>
-              </div>
-            )}
           </div>
 
         </div>
