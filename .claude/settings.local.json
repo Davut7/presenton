@@ -23,7 +23,8 @@
       "Bash(pip3 install:*)",
       "Bash(ls /Users/macbookpro/Desktop/projects/presenton/servers/fastapi/requirements*.txt /Users/macbookpro/Desktop/projects/presenton/requirements*.txt)",
       "Bash(export APP_DATA_DIRECTORY=/tmp/app_data TEMP_DIRECTORY=/tmp/presenton DISABLE_IMAGE_GENERATION=true LLM=google)",
-      "Bash(APP_DATA_DIRECTORY=/tmp/app_data TEMP_DIRECTORY=/tmp/presenton DISABLE_IMAGE_GENERATION=true LLM=google python3:*)"
+      "Bash(APP_DATA_DIRECTORY=/tmp/app_data TEMP_DIRECTORY=/tmp/presenton DISABLE_IMAGE_GENERATION=true LLM=google python3:*)",
+      "Bash(npm run:*)"
     ]
   }
 }
