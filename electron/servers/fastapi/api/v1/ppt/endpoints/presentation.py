@@ -45,6 +45,9 @@ from models.sse_response import SSECompleteResponse, SSEErrorResponse, SSERespon
 from services.database import get_async_session
 from services.temp_file_service import TEMP_FILE_SERVICE
 from services.concurrent_service import CONCURRENT_SERVICE
+
+# Limit parallel presentation generations to avoid overloading LLM API
+_generation_semaphore = asyncio.Semaphore(3)
 from models.sql.presentation import PresentationModel
 from services.pptx_presentation_creator import PptxPresentationCreator
 from models.sql.async_presentation_generation_status import (
@@ -493,6 +496,16 @@ async def check_if_api_request_is_valid(
 
 
 async def generate_presentation_handler(
+    request: GeneratePresentationRequest,
+    presentation_id: uuid.UUID,
+    async_status: Optional[AsyncPresentationGenerationTaskModel],
+    sql_session: AsyncSession = Depends(get_async_session),
+):
+    async with _generation_semaphore:
+        await _generate_presentation_impl(request, presentation_id, async_status, sql_session)
+
+
+async def _generate_presentation_impl(
     request: GeneratePresentationRequest,
     presentation_id: uuid.UUID,
     async_status: Optional[AsyncPresentationGenerationTaskModel],

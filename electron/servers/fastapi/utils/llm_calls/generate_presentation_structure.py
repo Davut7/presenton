@@ -151,7 +151,8 @@ async def generate_presentation_structure(
             is_retryable = (
                 "503" in error_msg or "429" in error_msg
                 or "high demand" in error_msg or "service unavailable" in error_msg
-                or "404" in error_msg
+                or "404" in error_msg or "403" in error_msg
+                or "permission_denied" in error_msg
             )
             if is_retryable and attempt < max_retries - 1:
                 if attempt + 1 >= fallback_after and current_model != FALLBACK_GOOGLE_MODEL and "404" not in error_msg:
