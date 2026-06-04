@@ -1,9 +1,24 @@
 import asyncio
 import dirtyjson
 import json
+import os
 import time
 import random
 from typing import AsyncGenerator, List, Optional, Dict, Any
+
+
+class _GeminiSchemaRetryCounter:
+    """Track how often the layout JSON schema overflows Gemini's structured-output limit.
+
+    Warns once at WARN_THRESHOLD so it's easy to spot at deploy time when a
+    new layout was added that pushes the schema past the limit.
+    """
+    count: int = 0
+    WARN_THRESHOLD: int = int(os.getenv("GEMINI_SCHEMA_RETRY_WARN_THRESHOLD", "10"))
+
+    @classmethod
+    def bump(cls) -> None:
+        cls.count += 1
 from fastapi import HTTPException
 from openai import APIStatusError, AsyncOpenAI, OpenAIError
 from openai.types.chat.chat_completion_chunk import (
@@ -951,7 +966,18 @@ class LLMClient:
         except Exception as e:
             error_msg = str(e).lower()
             if "too many states" in error_msg or ("400" in error_msg and "invalid_argument" in error_msg):
-                print(f"Schema too complex for Gemini, retrying without strict schema validation")
+                _GeminiSchemaRetryCounter.bump()
+                print(
+                    f"Schema too complex for Gemini, retrying without strict schema validation "
+                    f"(total occurrences this process: {_GeminiSchemaRetryCounter.count}); "
+                    f"consider simplifying the layout schema if this fires frequently."
+                )
+                if _GeminiSchemaRetryCounter.count == _GeminiSchemaRetryCounter.WARN_THRESHOLD:
+                    print(
+                        f"⚠️  Gemini schema-too-complex retries hit {_GeminiSchemaRetryCounter.WARN_THRESHOLD} — "
+                        f"the layout JSON schema is too large for structured-output. Reduce slide variants "
+                        f"or split presentation_layout_code into smaller chunks."
+                    )
                 response = await self._call_with_retry(
                     client.models.generate_content,
                     model=model,

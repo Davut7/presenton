@@ -30,6 +30,15 @@ from utils.image_provider import (
 import uuid
 
 
+_PEXELS_MAX_RETRIES = int(os.getenv("PEXELS_MAX_RETRIES", "10"))
+_PEXELS_TIMEOUT = int(os.getenv("PEXELS_TIMEOUT", "60"))
+_PEXELS_MAX_CONCURRENT = int(os.getenv("PEXELS_MAX_CONCURRENT", "4"))
+# Cap how many requests can hit Pexels at the same time. Without this,
+# 10+ parallel presentations × 10 slides each fire ~100 concurrent calls
+# and Pexels rate-limits everything regardless of retry/backoff.
+_pexels_semaphore = asyncio.Semaphore(_PEXELS_MAX_CONCURRENT)
+
+
 class _PexelsKeyRotator:
     """Round-robin rotator for multiple Pexels API keys."""
     _keys: list[str] = []
@@ -212,32 +221,40 @@ class ImageGenerationService:
 
     async def get_image_from_pexels(self, prompt: str) -> str:
         encoded_prompt = quote_plus(prompt)
-        max_retries = 5
-        for attempt in range(max_retries):
-            api_key = _PexelsKeyRotator.next_key()
-            if not api_key:
-                raise Exception("No Pexels API key configured")
-            async with aiohttp.ClientSession(trust_env=True) as session:
-                response = await session.get(
-                    f"https://api.pexels.com/v1/search?query={encoded_prompt}&per_page=5",
-                    headers={"Authorization": api_key},
-                    timeout=aiohttp.ClientTimeout(total=30),
-                )
-                if response.status == 429:
-                    wait_time = 1.0 + attempt * 1.5
-                    key_info = f"key {(_PexelsKeyRotator._index % _PexelsKeyRotator.key_count()) + 1}/{_PexelsKeyRotator.key_count()}" if _PexelsKeyRotator.key_count() > 1 else ""
-                    print(f"Pexels rate limit (429), switching key and retrying in {wait_time:.1f}s (attempt {attempt + 1}/{max_retries}) {key_info}")
-                    await asyncio.sleep(wait_time)
-                    continue
-                if response.status != 200:
-                    raise Exception(f"Pexels API returned status {response.status}")
-                data = await response.json()
-                photos = data.get("photos", [])
-                if not photos:
-                    raise Exception(f"Pexels returned no photos for query: {prompt}")
-                image_url = photos[0]["src"]["large"]
-                return image_url
-        raise Exception(f"Pexels API rate limited after {max_retries} retries")
+        async with _pexels_semaphore:
+            for attempt in range(_PEXELS_MAX_RETRIES):
+                api_key = _PexelsKeyRotator.next_key()
+                if not api_key:
+                    raise Exception("No Pexels API key configured")
+                async with aiohttp.ClientSession(trust_env=True) as session:
+                    response = await session.get(
+                        f"https://api.pexels.com/v1/search?query={encoded_prompt}&per_page=5",
+                        headers={"Authorization": api_key},
+                        timeout=aiohttp.ClientTimeout(total=_PEXELS_TIMEOUT),
+                    )
+                    if response.status == 429:
+                        # Exponential backoff with jitter: 2, 4, 8, 16, 32, 60, 60... seconds.
+                        wait_time = min(60, 2 ** attempt) + (attempt * 0.5)
+                        key_info = (
+                            f"key {(_PexelsKeyRotator._index % _PexelsKeyRotator.key_count()) + 1}/"
+                            f"{_PexelsKeyRotator.key_count()}"
+                            if _PexelsKeyRotator.key_count() > 1
+                            else ""
+                        )
+                        print(
+                            f"Pexels rate limit (429), switching key and retrying in {wait_time:.1f}s "
+                            f"(attempt {attempt + 1}/{_PEXELS_MAX_RETRIES}) {key_info}"
+                        )
+                        await asyncio.sleep(wait_time)
+                        continue
+                    if response.status != 200:
+                        raise Exception(f"Pexels API returned status {response.status}")
+                    data = await response.json()
+                    photos = data.get("photos", [])
+                    if not photos:
+                        raise Exception(f"Pexels returned no photos for query: {prompt}")
+                    return photos[0]["src"]["large"]
+            raise Exception(f"Pexels API rate limited after {_PEXELS_MAX_RETRIES} retries")
 
     async def get_image_from_pixabay(self, prompt: str) -> str:
         encoded_prompt = quote_plus(prompt)

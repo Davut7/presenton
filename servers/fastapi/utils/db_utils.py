@@ -21,6 +21,10 @@ def get_database_url_and_connect_args() -> tuple[str, dict]:
     connect_args = {}
     if "sqlite" in database_url:
         connect_args["check_same_thread"] = False
+        # 30s busy_timeout — wait instead of throwing OperationalError under
+        # concurrent writes (default is 5s, was hitting "database is locked"
+        # at 5+ parallel presentation jobs).
+        connect_args["timeout"] = 30
 
     try:
         split_result = urlsplit(database_url)
