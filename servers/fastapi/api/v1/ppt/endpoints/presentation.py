@@ -885,8 +885,26 @@ async def generate_presentation_handler(
             sql_session.add(async_status)
             await sql_session.commit()
 
-        # Run all asset tasks concurrently while batches may still be generating content
-        generated_assets_list = await asyncio.gather(*async_assets_generation_tasks)
+        # Run all asset tasks concurrently while batches may still be generating content.
+        # Heartbeat: Pexels API + Gemini image generation can each take 30-90s,
+        # all in flight at once. Without a tick here external pollers see
+        # "Fetching images and assets" frozen for several minutes.
+        _hb_stop = asyncio.Event()
+        _hb = asyncio.create_task(_heartbeat_task(
+            task_id,
+            "Fetching images and assets",
+            base_percent=78,
+            ceiling_percent=83,
+            stop_event=_hb_stop,
+        ))
+        try:
+            generated_assets_list = await asyncio.gather(*async_assets_generation_tasks)
+        finally:
+            _hb_stop.set()
+            try:
+                await _hb
+            except Exception:
+                pass
         generated_assets = []
         for assets_list in generated_assets_list:
             generated_assets.extend(assets_list)
