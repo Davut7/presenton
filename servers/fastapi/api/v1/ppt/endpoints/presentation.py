@@ -42,7 +42,7 @@ from utils.llm_calls.generate_presentation_outlines import generate_ppt_outline
 from models.sql.slide import SlideModel
 from models.sse_response import SSECompleteResponse, SSEErrorResponse, SSEResponse
 
-from services.database import get_async_session
+from services.database import get_async_session, async_session_maker
 from services.temp_file_service import TEMP_FILE_SERVICE
 from services.concurrent_service import CONCURRENT_SERVICE
 from models.sql.presentation import PresentationModel
@@ -83,6 +83,65 @@ def _notify_progress(task_id: str, percent: int, message: str, status: str = "in
             "status": status,
             "data": data,
         })
+
+
+async def _heartbeat_task(
+    task_id: Optional[str],
+    base_message: str,
+    base_percent: int,
+    ceiling_percent: int,
+    stop_event: asyncio.Event,
+    interval_seconds: float = 15.0,
+):
+    """
+    Tick the async-status row every `interval_seconds` while a slow LLM
+    phase runs. Purpose: external clients polling /status/{taskId} need to
+    see `updated_at` advance so they don't conclude the task is dead and
+    kill it (the gpt backend's smart-watchdog uses updated_at to decide
+    aliveness).
+
+    Why a separate session per tick: AsyncSession is not safe to use from
+    concurrent coroutines. The main handler holds its own session and
+    commits at phase boundaries; we open a fresh session per tick so we
+    never race with it.
+
+    Percent is bumped by +1 each tick up to `ceiling_percent` (so external
+    UI sees forward motion even with no real status change). Message gets a
+    "(Ns elapsed)" suffix so the user knows the system is alive.
+    """
+    if not task_id:
+        return
+    tick = 0
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
+            return  # stop_event was set, exit
+        except asyncio.TimeoutError:
+            tick += 1
+
+        elapsed = int(tick * interval_seconds)
+        percent = min(base_percent + tick, ceiling_percent)
+        message = f"{base_message} ({elapsed}s)"
+        # Broadcast to SSE listeners.
+        _notify_progress(task_id, percent, message)
+
+        # Persist to DB on its own session so we don't race with the main
+        # handler's session. Tolerant of all failures: this is a liveness
+        # ping, not a critical write.
+        try:
+            async with async_session_maker() as session:
+                row = await session.get(AsyncPresentationGenerationTaskModel, task_id)
+                if not row:
+                    return
+                if row.status in ("completed", "error"):
+                    return
+                row.message = message
+                row.updated_at = datetime.now()
+                session.add(row)
+                await session.commit()
+        except Exception as e:
+            # Don't crash the heartbeat — just log and keep going.
+            print(f"[heartbeat] {task_id}: db update failed (non-fatal): {e}")
 
 
 @PRESENTATION_ROUTER.get("/all", response_model=List[PresentationWithSlides])
@@ -642,18 +701,37 @@ async def generate_presentation_handler(
         layout_model = await get_layout_by_name(request.template)
         total_slide_layouts = len(layout_model.slides)
 
-        # Generate Structure
+        # Generate Structure — slow LLM call. Run a heartbeat in parallel
+        # so external pollers see updated_at advance and our percent ticks
+        # upward. Without this, /status/{taskId} stays at the previous
+        # "Selecting layout" message for several minutes and the gpt
+        # backend's watchdog assumes the task is dead and kills it.
         if layout_model.ordered:
             presentation_structure = layout_model.to_presentation_structure()
         else:
-            presentation_structure: PresentationStructureModel = (
-                await generate_presentation_structure(
-                    presentation_outlines,
-                    layout_model,
-                    request.instructions,
-                    using_slides_markdown,
+            _hb_stop = asyncio.Event()
+            _hb = asyncio.create_task(_heartbeat_task(
+                task_id,
+                "Selecting layout for each slide",
+                base_percent=25,
+                ceiling_percent=27,
+                stop_event=_hb_stop,
+            ))
+            try:
+                presentation_structure: PresentationStructureModel = (
+                    await generate_presentation_structure(
+                        presentation_outlines,
+                        layout_model,
+                        request.instructions,
+                        using_slides_markdown,
+                    )
                 )
-            )
+            finally:
+                _hb_stop.set()
+                try:
+                    await _hb
+                except Exception:
+                    pass
 
         presentation_structure.slides = presentation_structure.slides[:total_outlines]
         for index in range(total_outlines):
@@ -749,7 +827,26 @@ async def generate_presentation_handler(
                 )
                 for i in range(start, end)
             ]
-            batch_results = await asyncio.gather(*content_tasks, return_exceptions=True)
+            # Heartbeat for THIS batch only (so percent ceiling reflects how
+            # much of the work remains). Otherwise a single Gemini retry on
+            # batch 1 of 5 looks identical to one on batch 5 of 5 in the UI.
+            _batch_ceiling = 35 + int((end / len(slide_layouts)) * 40) - 1
+            _hb_stop = asyncio.Event()
+            _hb = asyncio.create_task(_heartbeat_task(
+                task_id,
+                f"Generating slides {start + 1}-{end}/{len(slide_layouts)}",
+                base_percent=35 + int((start / len(slide_layouts)) * 40),
+                ceiling_percent=max(_batch_ceiling, 36),
+                stop_event=_hb_stop,
+            ))
+            try:
+                batch_results = await asyncio.gather(*content_tasks, return_exceptions=True)
+            finally:
+                _hb_stop.set()
+                try:
+                    await _hb
+                except Exception:
+                    pass
 
             # Progress: 35-75% for slide generation
             slides_done = min(end, len(slide_layouts))
@@ -821,12 +918,18 @@ async def generate_presentation_handler(
             sql_session.add(async_status)
             await sql_session.commit()
 
-        # Triggering webhook on success
+        # Triggering webhook on success. We extend the public payload with
+        # `task_id` so downstream subscribers (gpt backend) can look up the
+        # async task row they created when calling /generate/async.
+        # Presenton's own clients ignore unknown fields, so this is BC-safe.
+        _webhook_payload = response.model_dump(mode="json")
+        if async_status is not None:
+            _webhook_payload["task_id"] = async_status.id
         CONCURRENT_SERVICE.run_task(
             None,
             WebhookService.send_webhook,
             WebhookEvent.PRESENTATION_GENERATION_COMPLETED,
-            response.model_dump(mode="json"),
+            _webhook_payload,
         )
 
         return response
@@ -838,12 +941,15 @@ async def generate_presentation_handler(
 
         api_error_model = APIErrorModel.from_exception(e)
 
-        # Triggering webhook on failure
+        # Triggering webhook on failure (include task_id, same as success).
+        _err_payload = api_error_model.model_dump(mode="json")
+        if async_status is not None:
+            _err_payload["task_id"] = async_status.id
         CONCURRENT_SERVICE.run_task(
             None,
             WebhookService.send_webhook,
             WebhookEvent.PRESENTATION_GENERATION_FAILED,
-            api_error_model.model_dump(mode="json"),
+            _err_payload,
         )
 
         _progress(0, "Presentation generation failed", "error")
