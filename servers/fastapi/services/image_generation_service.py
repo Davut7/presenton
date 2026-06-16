@@ -17,6 +17,8 @@ from utils.get_env import (
 from utils.get_env import get_pixabay_api_key_env
 from utils.get_env import get_comfyui_url_env
 from utils.get_env import get_comfyui_workflow_env
+from utils.get_env import get_unsplash_access_key_env
+import time
 from utils.image_provider import (
     is_gpt_image_1_5_selected,
     is_image_generation_disabled,
@@ -32,38 +34,117 @@ import uuid
 
 _PEXELS_MAX_RETRIES = int(os.getenv("PEXELS_MAX_RETRIES", "10"))
 _PEXELS_TIMEOUT = int(os.getenv("PEXELS_TIMEOUT", "60"))
-_PEXELS_MAX_CONCURRENT = int(os.getenv("PEXELS_MAX_CONCURRENT", "4"))
-# Cap how many requests can hit Pexels at the same time. Without this,
-# 10+ parallel presentations × 10 slides each fire ~100 concurrent calls
-# and Pexels rate-limits everything regardless of retry/backoff.
-_pexels_semaphore = asyncio.Semaphore(_PEXELS_MAX_CONCURRENT)
+_PEXELS_MAX_CONCURRENT = int(os.getenv("PEXELS_MAX_CONCURRENT", "0") or 0)
+# Per-key cool-down when Pexels returns 429. Pexels resets hourly buckets,
+# so 60s is a decent middle ground: long enough to clear small bursts,
+# short enough to recover quickly if rate-limit was transient.
+_PEXELS_KEY_COOLDOWN_SECONDS = int(os.getenv("PEXELS_KEY_COOLDOWN_SECONDS", "60"))
 
 
-class _PexelsKeyRotator:
-    """Round-robin rotator for multiple Pexels API keys."""
-    _keys: list[str] = []
-    _index: int = 0
+class _KeyRotator:
+    """
+    Round-robin rotator with per-key cool-down. When a key gets a 429,
+    mark it dead for COOLDOWN seconds; skip it in future picks. This is
+    materially better than blind round-robin: with 5 keys where 1 is
+    rate-limited, blind RR loses 20% of requests to instant retries
+    while cool-down RR routes 100% of traffic through the 4 live keys.
 
+    Used for both Pexels and Unsplash (each gets its own instance).
+    """
+
+    def __init__(self, env_var: str, label: str):
+        self._env_var = env_var
+        self._label = label
+        self._keys: list[str] = []
+        self._index: int = 0
+        self._dead_until: dict[str, float] = {}
+        self._inited = False
+
+    def _init_keys(self):
+        raw = os.getenv(self._env_var) or ""
+        self._keys = [k.strip() for k in raw.split(",") if k.strip()]
+        self._inited = True
+
+    def key_count(self) -> int:
+        if not self._inited:
+            self._init_keys()
+        return len(self._keys)
+
+    def live_count(self) -> int:
+        """How many keys are NOT currently in cool-down."""
+        if not self._inited:
+            self._init_keys()
+        now = time.monotonic()
+        return sum(1 for k in self._keys if self._dead_until.get(k, 0) <= now)
+
+    def next_key(self) -> str | None:
+        """Return a live key, or None if all keys are in cool-down."""
+        if not self._inited:
+            self._init_keys()
+        if not self._keys:
+            return None
+        now = time.monotonic()
+        for _ in range(len(self._keys)):
+            key = self._keys[self._index % len(self._keys)]
+            self._index += 1
+            if self._dead_until.get(key, 0) <= now:
+                return key
+        return None
+
+    def mark_rate_limited(self, key: str, seconds: int = _PEXELS_KEY_COOLDOWN_SECONDS):
+        """Mark a key dead for `seconds`. Idempotent — extends cool-down."""
+        self._dead_until[key] = time.monotonic() + seconds
+        print(f"[{self._label}] key …{key[-6:]} cooled down for {seconds}s "
+              f"(live: {self.live_count()}/{self.key_count()})")
+
+
+# Global rotators, one per provider. Pixabay and Unsplash are fallback
+# providers used by get_image_from_pexels when Pexels exhausts its keys.
+# Either can be configured (comma-separated) or both — order is
+# Pixabay → Unsplash. If neither set, fallback is a no-op.
+_pexels_rotator = _KeyRotator("PEXELS_API_KEY", "Pexels")
+_pixabay_rotator = _KeyRotator("PIXABAY_API_KEY", "Pixabay")
+_unsplash_rotator = _KeyRotator("UNSPLASH_ACCESS_KEY", "Unsplash")
+
+
+def _resolve_pexels_concurrent_cap() -> int:
+    """
+    Concurrency cap = explicit env override OR 2 × live key count (min 4).
+    With 5 keys we allow ~10 concurrent Pexels calls; with 1 key we stick
+    to 4 (the old default). This lets you horizontally scale by just
+    adding more keys to PEXELS_API_KEY.
+    """
+    if _PEXELS_MAX_CONCURRENT > 0:
+        return _PEXELS_MAX_CONCURRENT
+    keys = max(1, _pexels_rotator.key_count())
+    return max(4, keys * 2)
+
+
+# Initialised lazily on first use so that env vars set after import still apply.
+_pexels_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_pexels_semaphore() -> asyncio.Semaphore:
+    global _pexels_semaphore
+    if _pexels_semaphore is None:
+        _pexels_semaphore = asyncio.Semaphore(_resolve_pexels_concurrent_cap())
+    return _pexels_semaphore
+
+
+# Back-compat alias for the old class name used in tests.
+class _PexelsKeyRotator:  # noqa: N801
+    """Deprecated shim — kept for tests that reference the old name."""
     @classmethod
     def init_keys(cls):
-        raw = os.getenv("PEXELS_API_KEY") or ""
-        cls._keys = [k.strip() for k in raw.split(",") if k.strip()]
+        _pexels_rotator._init_keys()
 
     @classmethod
     def next_key(cls) -> str | None:
-        if not cls._keys:
-            cls.init_keys()
-        if not cls._keys:
-            return None
-        key = cls._keys[cls._index % len(cls._keys)]
-        cls._index += 1
-        return key
+        return _pexels_rotator.next_key()
 
     @classmethod
     def key_count(cls) -> int:
-        if not cls._keys:
-            cls.init_keys()
-        return len(cls._keys)
+        return _pexels_rotator.key_count()
 
 
 class ImageGenerationService:
@@ -220,41 +301,153 @@ class ImageGenerationService:
         )
 
     async def get_image_from_pexels(self, prompt: str) -> str:
+        """
+        Pexels with cool-down rotation + Unsplash fallback.
+
+        Strategy:
+          1. Try Pexels with a live (not-cool-down'd) key.
+          2. On 429, mark that key dead for COOLDOWN seconds and retry
+             with the next live key — no sleep, immediate switch.
+          3. If all Pexels keys are dead → break and try Unsplash.
+          4. If Unsplash also fails → raise (caller will return placeholder).
+        """
         encoded_prompt = quote_plus(prompt)
-        async with _pexels_semaphore:
+        async with _get_pexels_semaphore():
             for attempt in range(_PEXELS_MAX_RETRIES):
-                api_key = _PexelsKeyRotator.next_key()
+                api_key = _pexels_rotator.next_key()
                 if not api_key:
-                    raise Exception("No Pexels API key configured")
+                    # All Pexels keys are cool-down'd OR no keys configured.
+                    print(
+                        f"[Pexels] no live keys (configured={_pexels_rotator.key_count()}, "
+                        f"live={_pexels_rotator.live_count()}) — trying Unsplash"
+                    )
+                    break
+                try:
+                    async with aiohttp.ClientSession(trust_env=True) as session:
+                        response = await session.get(
+                            f"https://api.pexels.com/v1/search?query={encoded_prompt}&per_page=5",
+                            headers={"Authorization": api_key},
+                            timeout=aiohttp.ClientTimeout(total=_PEXELS_TIMEOUT),
+                        )
+                        if response.status == 429:
+                            _pexels_rotator.mark_rate_limited(api_key)
+                            # Immediately try the next live key — no sleep
+                            # needed because we won't pick the same dead key.
+                            continue
+                        if response.status != 200:
+                            raise Exception(f"Pexels API returned status {response.status}")
+                        data = await response.json()
+                        photos = data.get("photos", [])
+                        if not photos:
+                            # Empty results aren't a rate-limit issue — fall
+                            # straight to Unsplash for a different photo pool.
+                            print(f"[Pexels] no photos for '{prompt[:60]}' — trying Unsplash")
+                            break
+                        return photos[0]["src"]["large"]
+                except asyncio.TimeoutError:
+                    # Network timeout — treat as a transient failure and try
+                    # the next key. Don't cool-down (the key may be fine).
+                    print(f"[Pexels] timeout on attempt {attempt + 1} — retrying")
+                    continue
+
+            # Fallback chain: Pixabay → Unsplash. First one that finds an
+            # image wins. If both fail or aren't configured, raise so caller
+            # produces a placeholder.
+            fallback_url = await self._try_fallback_providers(encoded_prompt, prompt)
+            if fallback_url:
+                return fallback_url
+            raise Exception(
+                f"Pexels exhausted after {_PEXELS_MAX_RETRIES} attempts and all fallback providers failed"
+            )
+
+    async def _try_fallback_providers(self, encoded_prompt: str, original_prompt: str) -> str | None:
+        """
+        Try fallback image providers in priority order: Pixabay, then
+        Unsplash. Each provider supports key rotation with cool-down. The
+        first successful URL wins; failures are silently swallowed so the
+        caller can fall through to a placeholder if everything dies.
+
+        Why Pixabay first: free tier is 5000 req/h vs Unsplash demo 50/h
+        — much higher headroom on the same workload.
+        """
+        url = await self._try_pixabay_fallback(encoded_prompt, original_prompt)
+        if url:
+            return url
+        return await self._try_unsplash_fallback(encoded_prompt, original_prompt)
+
+    async def _try_pixabay_fallback(self, encoded_prompt: str, original_prompt: str) -> str | None:
+        """Pixabay fallback. Same rotation + cool-down pattern as Pexels."""
+        if _pixabay_rotator.key_count() == 0:
+            return None
+
+        for attempt in range(3):
+            api_key = _pixabay_rotator.next_key()
+            if not api_key:
+                print("[Pixabay] no live keys left, skipping")
+                return None
+            try:
                 async with aiohttp.ClientSession(trust_env=True) as session:
+                    # Pixabay auth is via ?key=... query param (no header).
                     response = await session.get(
-                        f"https://api.pexels.com/v1/search?query={encoded_prompt}&per_page=5",
-                        headers={"Authorization": api_key},
+                        f"https://pixabay.com/api/?key={api_key}&q={encoded_prompt}&image_type=photo&per_page=5",
                         timeout=aiohttp.ClientTimeout(total=_PEXELS_TIMEOUT),
                     )
                     if response.status == 429:
-                        # Exponential backoff with jitter: 2, 4, 8, 16, 32, 60, 60... seconds.
-                        wait_time = min(60, 2 ** attempt) + (attempt * 0.5)
-                        key_info = (
-                            f"key {(_PexelsKeyRotator._index % _PexelsKeyRotator.key_count()) + 1}/"
-                            f"{_PexelsKeyRotator.key_count()}"
-                            if _PexelsKeyRotator.key_count() > 1
-                            else ""
-                        )
-                        print(
-                            f"Pexels rate limit (429), switching key and retrying in {wait_time:.1f}s "
-                            f"(attempt {attempt + 1}/{_PEXELS_MAX_RETRIES}) {key_info}"
-                        )
-                        await asyncio.sleep(wait_time)
+                        # Pixabay: 100 req/min, headers indicate reset.
+                        # We cool-down 60s — same as other providers.
+                        _pixabay_rotator.mark_rate_limited(api_key)
                         continue
                     if response.status != 200:
-                        raise Exception(f"Pexels API returned status {response.status}")
+                        print(f"[Pixabay] HTTP {response.status} — skipping")
+                        return None
                     data = await response.json()
-                    photos = data.get("photos", [])
-                    if not photos:
-                        raise Exception(f"Pexels returned no photos for query: {prompt}")
-                    return photos[0]["src"]["large"]
-            raise Exception(f"Pexels API rate limited after {_PEXELS_MAX_RETRIES} retries")
+                    hits = data.get("hits", [])
+                    if not hits:
+                        print(f"[Pixabay] no results for '{original_prompt[:60]}'")
+                        return None
+                    return hits[0]["largeImageURL"]
+            except asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                print(f"[Pixabay] unexpected error: {e}")
+                return None
+        return None
+
+    async def _try_unsplash_fallback(self, encoded_prompt: str, original_prompt: str) -> str | None:
+        """Unsplash fallback (lowest priority — used only if Pixabay also empty)."""
+        if _unsplash_rotator.key_count() == 0:
+            return None
+
+        for attempt in range(3):
+            access_key = _unsplash_rotator.next_key()
+            if not access_key:
+                print("[Unsplash] no live keys left, skipping")
+                return None
+            try:
+                async with aiohttp.ClientSession(trust_env=True) as session:
+                    response = await session.get(
+                        f"https://api.unsplash.com/search/photos?query={encoded_prompt}&per_page=5",
+                        headers={"Authorization": f"Client-ID {access_key}"},
+                        timeout=aiohttp.ClientTimeout(total=_PEXELS_TIMEOUT),
+                    )
+                    if response.status == 429:
+                        _unsplash_rotator.mark_rate_limited(access_key)
+                        continue
+                    if response.status != 200:
+                        print(f"[Unsplash] HTTP {response.status} — skipping")
+                        return None
+                    data = await response.json()
+                    results = data.get("results", [])
+                    if not results:
+                        print(f"[Unsplash] no results for '{original_prompt[:60]}'")
+                        return None
+                    return results[0]["urls"]["regular"]
+            except asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                print(f"[Unsplash] unexpected error: {e}")
+                return None
+        return None
 
     async def get_image_from_pixabay(self, prompt: str) -> str:
         encoded_prompt = quote_plus(prompt)

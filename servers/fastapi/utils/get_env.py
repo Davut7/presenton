@@ -87,6 +87,13 @@ def get_pixabay_api_key_env():
     return os.getenv("PIXABAY_API_KEY")
 
 
+def get_unsplash_access_key_env():
+    # Comma-separated like PEXELS_API_KEY for rotation. The "access key" is
+    # the public-facing key from Unsplash (server-side calls use it directly
+    # as `Authorization: Client-ID <key>`).
+    return os.getenv("UNSPLASH_ACCESS_KEY")
+
+
 def get_tool_calls_env():
     return os.getenv("TOOL_CALLS")
 
