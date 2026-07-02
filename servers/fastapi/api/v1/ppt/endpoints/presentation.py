@@ -870,6 +870,11 @@ async def generate_presentation_handler(
                     speaker_note=slide_content.get("__speaker_note__"),
                     content=slide_content,
                 )
+                # Pre-set placeholder asset URLs so the slide is renderable
+                # even if its real-asset fetch later fails or gets cancelled
+                # on the FETCH_ASSETS_TIMEOUT path. process_slide_and_fetch_assets
+                # overwrites these with real URLs on success.
+                process_slide_add_placeholder_assets(slide)
                 slides.append(slide)
                 batch_slides.append(slide)
 
@@ -897,8 +902,30 @@ async def generate_presentation_handler(
             ceiling_percent=83,
             stop_event=_hb_stop,
         ))
+        # Hard ceiling on the whole asset-fetch phase. Each slide task already
+        # falls back to a placeholder on its own failure, but a wedged socket
+        # (e.g. a stock/AI provider that accepts the connection then never
+        # responds) can hang the gather indefinitely and freeze updated_at.
+        # On timeout we drop the un-fetched assets (slides keep their
+        # placeholder URLs from process_slide_add_placeholder_assets) rather
+        # than letting the watchdog kill the whole presentation.
+        _fetch_timeout = int(os.getenv("FETCH_ASSETS_TIMEOUT", "300") or 300)
         try:
-            generated_assets_list = await asyncio.gather(*async_assets_generation_tasks)
+            generated_assets_list = await asyncio.wait_for(
+                asyncio.gather(*async_assets_generation_tasks),
+                timeout=_fetch_timeout,
+            )
+        except asyncio.TimeoutError:
+            print(
+                f"[fetch] asset fetch exceeded {_fetch_timeout}s — proceeding with "
+                f"placeholders for un-fetched slides"
+            )
+            generated_assets_list = []
+            for t in async_assets_generation_tasks:
+                if t.done() and not t.cancelled() and t.exception() is None:
+                    generated_assets_list.append(t.result())
+                else:
+                    t.cancel()
         finally:
             _hb_stop.set()
             try:
@@ -918,11 +945,32 @@ async def generate_presentation_handler(
         _progress(random.randint(85, 92), "Exporting presentation")
         if async_status:
             sql_session.add(async_status)
+            # Commit BEFORE the export so `updated_at` reflects entry into this
+            # phase. Without this the row still shows the "Fetching images"
+            # timestamp for the whole (multi-minute) export.
+            await sql_session.commit()
 
-        # 9. Export
-        presentation_and_path = await export_presentation(
-            presentation_id, presentation.title or str(uuid.uuid4()), request.export_as
-        )
+        # 9. Export — slow (Puppeteer render + python-pptx). Run a heartbeat so
+        # external pollers keep seeing updated_at advance; this phase used to
+        # have none, which is exactly where tasks were dying at 85-92%.
+        _hb_stop = asyncio.Event()
+        _hb = asyncio.create_task(_heartbeat_task(
+            task_id,
+            "Exporting presentation",
+            base_percent=92,
+            ceiling_percent=98,
+            stop_event=_hb_stop,
+        ))
+        try:
+            presentation_and_path = await export_presentation(
+                presentation_id, presentation.title or str(uuid.uuid4()), request.export_as
+            )
+        finally:
+            _hb_stop.set()
+            try:
+                await _hb
+            except Exception:
+                pass
 
         response = PresentationPathAndEditPath(
             **presentation_and_path.model_dump(),

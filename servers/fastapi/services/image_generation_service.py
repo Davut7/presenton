@@ -335,7 +335,17 @@ class ImageGenerationService:
                             # needed because we won't pick the same dead key.
                             continue
                         if response.status != 200:
-                            raise Exception(f"Pexels API returned status {response.status}")
+                            # Non-429 error (503 outage, 5xx, etc). Retrying the
+                            # same broken endpoint is pointless and rotating keys
+                            # won't help — the whole Pexels service is down. Break
+                            # to the Pixabay/Unsplash fallback chain instead of
+                            # raising, which previously skipped fallback entirely
+                            # and dumped every slide to a placeholder.
+                            print(
+                                f"[Pexels] HTTP {response.status} — abandoning Pexels, "
+                                f"trying fallback providers"
+                            )
+                            break
                         data = await response.json()
                         photos = data.get("photos", [])
                         if not photos:

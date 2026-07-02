@@ -5,6 +5,21 @@ from fastembed_vectorstore import FastembedEmbeddingModel, FastembedVectorstore
 from utils.path_helpers import get_resource_path, get_writable_path
 
 
+# Cap concurrent embedding inferences. The embedder runs in a worker thread
+# but tokenisation holds the GIL; many simultaneous icon searches starve the
+# event loop. Serialising to a small number keeps the loop responsive under
+# concurrent asset fetching. 0/unset → default 2.
+_ICON_SEARCH_CONCURRENCY = int(os.getenv("ICON_SEARCH_CONCURRENCY", "2") or 2)
+_icon_search_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_icon_search_semaphore() -> asyncio.Semaphore:
+    global _icon_search_semaphore
+    if _icon_search_semaphore is None:
+        _icon_search_semaphore = asyncio.Semaphore(max(1, _ICON_SEARCH_CONCURRENCY))
+    return _icon_search_semaphore
+
+
 class IconFinderService:
     def __init__(self):
         self.model = FastembedEmbeddingModel.AllMiniLML6V2
@@ -118,7 +133,8 @@ class IconFinderService:
             return []
             
         try:
-            result = await asyncio.to_thread(self.vectorstore.search, query, k)
+            async with _get_icon_search_semaphore():
+                result = await asyncio.to_thread(self.vectorstore.search, query, k)
             return [
                 f"/static/icons/bold/{each[0].split('||')[0]}.svg"
                 for each in result
