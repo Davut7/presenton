@@ -116,6 +116,8 @@ class PptxTextBoxModel(PptxShapeModel):
     fill: Optional[PptxFillModel] = None
     position: PptxPositionModel
     text_wrap: bool = True
+    # Number of line boxes the text occupied when rendered in the browser.
+    rendered_line_count: Optional[int] = None
     paragraphs: List[PptxParagraphModel]
 
 
@@ -128,6 +130,8 @@ class PptxAutoShapeBoxModel(PptxShapeModel):
     shadow: Optional[PptxShadowModel] = None
     position: PptxPositionModel
     text_wrap: bool = True
+    # Number of line boxes the text occupied when rendered in the browser.
+    rendered_line_count: Optional[int] = None
     border_radius: Optional[int] = None
     paragraphs: Optional[List[PptxParagraphModel]] = None
     

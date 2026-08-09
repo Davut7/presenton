@@ -915,6 +915,89 @@ async function getElementAttributes(
       return font;
     }
 
+    // Counts how many line boxes the element's text actually occupies in the
+    // browser. Used so that text the browser laid out on a single line is not
+    // re-wrapped by PowerPoint, whose font metrics differ slightly from Chrome's.
+    function parseRenderedLineCount(el: Element): number | undefined {
+      const text = el.textContent || "";
+      if (!text.trim()) {
+        return undefined;
+      }
+
+      try {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const rects = Array.from(range.getClientRects()).filter(
+          (rect) => rect.width > 0 && rect.height > 0
+        );
+        if (rects.length === 0) {
+          return undefined;
+        }
+
+        // Group rects into rows by their vertical midpoint: a wrapped line
+        // produces rects whose centres differ by roughly one line height.
+        const tops: number[] = [];
+        for (const rect of rects) {
+          const centre = rect.top + rect.height / 2;
+          const matched = tops.some(
+            (existing) => Math.abs(existing - centre) < rect.height / 2
+          );
+          if (!matched) {
+            tops.push(centre);
+          }
+        }
+        return tops.length;
+      } catch {
+        return undefined;
+      }
+    }
+
+    // Width the text needs when laid out WITHOUT CSS letter-spacing, or
+    // undefined when letter-spacing does not apply.
+    //
+    // The .pptx carries no letter-spacing, so a box sized from a tightened
+    // (negative letter-spacing) layout is narrower than the text the viewer
+    // actually draws. PowerPoint hides this by overflowing sideways, but Google
+    // Slides re-wraps the line instead. Measuring the untracked width lets the
+    // box be widened to fit the text every renderer will produce.
+    function parseUntrackedTextWidth(el: Element): number | undefined {
+      const text = el.textContent || "";
+      if (!text.trim()) {
+        return undefined;
+      }
+
+      const htmlEl = el as HTMLElement;
+      const letterSpacing = window.getComputedStyle(el).letterSpacing;
+      // Only negative tracking makes the box too small; "normal" and positive
+      // tracking already leave enough room.
+      if (!letterSpacing || letterSpacing === "normal") {
+        return undefined;
+      }
+      const tracking = parseFloat(letterSpacing);
+      if (isNaN(tracking) || tracking >= 0) {
+        return undefined;
+      }
+
+      const previous = htmlEl.style.letterSpacing;
+      try {
+        htmlEl.style.letterSpacing = "normal";
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        const rects = Array.from(range.getClientRects()).filter(
+          (rect) => rect.width > 0 && rect.height > 0
+        );
+        if (rects.length === 0) {
+          return undefined;
+        }
+        // Widest line box is what a renderer without tracking has to fit.
+        return Math.max(...rects.map((rect) => rect.width));
+      } catch {
+        return undefined;
+      } finally {
+        htmlEl.style.letterSpacing = previous;
+      }
+    }
+
     function parseLineHeight(computedStyles: CSSStyleDeclaration, el: Element) {
       const lineHeight = computedStyles.lineHeight;
       const innerText = el.textContent || "";
@@ -1171,6 +1254,10 @@ async function getElementAttributes(
 
       const textWrap = computedStyles.whiteSpace !== "nowrap";
 
+      const renderedLineCount = parseRenderedLineCount(el);
+
+      const untrackedTextWidth = parseUntrackedTextWidth(el);
+
       const filters = parseFilters(computedStyles);
 
       const opacity = parseFloat(computedStyles.opacity);
@@ -1205,6 +1292,8 @@ async function getElementAttributes(
         shape: shape,
         connectorType: undefined,
         textWrap: textWrap,
+        renderedLineCount: renderedLineCount,
+        untrackedTextWidth: untrackedTextWidth,
         should_screenshot: false,
         element: undefined,
         filters: filters,

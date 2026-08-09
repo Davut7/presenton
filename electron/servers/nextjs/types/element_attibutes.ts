@@ -60,6 +60,13 @@ export interface ElementAttributes {
   shape?: 'rectangle' | 'circle';
   connectorType?: string;
   textWrap?: boolean;
+  /** Number of line boxes the text occupied when rendered in the browser. */
+  renderedLineCount?: number;
+  /**
+   * Width the text needs without CSS letter-spacing. Set only when the element
+   * uses negative tracking, which the .pptx cannot express.
+   */
+  untrackedTextWidth?: number;
   should_screenshot?: boolean;
   element?: ElementHandle<Element>;
   filters?: {

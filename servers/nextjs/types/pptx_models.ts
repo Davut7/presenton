@@ -286,6 +286,8 @@ export interface PptxTextBoxModel extends PptxShapeModel {
   fill?: PptxFillModel;
   position: PptxPositionModel;
   text_wrap: boolean;
+  /** Line boxes the text occupied in the browser; lets the renderer avoid re-wrapping. */
+  rendered_line_count?: number;
   paragraphs: PptxParagraphModel[];
 }
 
@@ -298,6 +300,8 @@ export interface PptxAutoShapeBoxModel extends PptxShapeModel {
   shadow?: PptxShadowModel;
   position: PptxPositionModel;
   text_wrap: boolean;
+  /** Line boxes the text occupied in the browser; lets the renderer avoid re-wrapping. */
+  rendered_line_count?: number;
   border_radius?: number;
   paragraphs?: PptxParagraphModel[];
 }

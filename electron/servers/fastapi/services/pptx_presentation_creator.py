@@ -74,6 +74,10 @@ def _http_url_to_local_path(image_path: str) -> Optional[str]:
 
 
 class PptxPresentationCreator:
+    # Slide size in points, matching the 1280x720 browser viewport used for capture.
+    SLIDE_WIDTH_PT = 1280
+    SLIDE_HEIGHT_PT = 720
+
     def __init__(self, ppt_model: PptxPresentationModel, temp_dir: str):
         self._temp_dir = temp_dir
 
@@ -81,8 +85,8 @@ class PptxPresentationCreator:
         self._slide_models = ppt_model.slides
 
         self._ppt = Presentation()
-        self._ppt.slide_width = Pt(1280)
-        self._ppt.slide_height = Pt(720)
+        self._ppt.slide_width = Pt(self.SLIDE_WIDTH_PT)
+        self._ppt.slide_height = Pt(self.SLIDE_HEIGHT_PT)
 
     def get_sub_element(self, parent, tagname, **kwargs):
         """Helper method to create XML elements"""
@@ -356,8 +360,25 @@ class PptxPresentationCreator:
             autoshape_box_model.type, *position.to_pt_list()
         )
 
+        # Only nudge the width when the shape is a pure text carrier. Growing a
+        # shape that has a visible fill, stroke or shadow would change what the
+        # slide actually looks like.
+        has_visible_box = (
+            autoshape_box_model.fill
+            or autoshape_box_model.stroke
+            or autoshape_box_model.shadow
+        )
+        if autoshape_box_model.paragraphs and not has_visible_box:
+            autoshape.width += self.get_wrap_safety_margin(
+                position,
+                autoshape_box_model.paragraphs,
+                autoshape_box_model.rendered_line_count,
+            )
+
         textbox = autoshape.text_frame
-        textbox.word_wrap = autoshape_box_model.text_wrap
+        textbox.word_wrap = self.should_word_wrap(
+            autoshape_box_model.text_wrap, autoshape_box_model.rendered_line_count
+        )
 
         self.apply_fill_to_shape(autoshape, autoshape_box_model.fill)
         self.apply_margin_to_text_box(textbox, autoshape_box_model.margin)
@@ -371,14 +392,73 @@ class PptxPresentationCreator:
     def add_textbox(self, slide: Slide, textbox_model: PptxTextBoxModel):
         position = textbox_model.position
         textbox_shape = slide.shapes.add_textbox(*position.to_pt_list())
-        textbox_shape.width += Pt(2)
+        textbox_shape.width += self.get_wrap_safety_margin(
+            position, textbox_model.paragraphs, textbox_model.rendered_line_count
+        )
 
         textbox = textbox_shape.text_frame
-        textbox.word_wrap = textbox_model.text_wrap
+        textbox.word_wrap = self.should_word_wrap(
+            textbox_model.text_wrap, textbox_model.rendered_line_count
+        )
 
         self.apply_fill_to_shape(textbox_shape, textbox_model.fill)
         self.apply_margin_to_text_box(textbox, textbox_model.margin)
         self.add_paragraphs(textbox, textbox_model.paragraphs)
+
+    def should_word_wrap(
+        self, text_wrap: bool, rendered_line_count: Optional[int]
+    ) -> bool:
+        """Whether PowerPoint is allowed to re-wrap this text box.
+
+        Text the browser fitted on a single line must never be re-wrapped. The
+        font the deck asks for (e.g. Montserrat) is usually absent on the
+        machine opening the file, so the viewer substitutes a wider face; a line
+        that just fitted in Chrome then overflows and gets pushed onto a second
+        line. Because the box also auto-grows in height, the extra line pushes
+        the text outside the box and it collides with whatever sits below.
+
+        Turning wrapping off pins such text to one line, so it may overhang the
+        box horizontally instead of overflowing downwards. Genuinely multi-line
+        text keeps wrapping - it needs the line breaks.
+        """
+        if rendered_line_count == 1:
+            return False
+        return text_wrap
+
+    def get_wrap_safety_margin(
+        self,
+        position: PptxPositionModel,
+        paragraphs: Optional[List[PptxParagraphModel]],
+        rendered_line_count: Optional[int],
+    ) -> int:
+        """Extra width added to a text box so PowerPoint does not re-wrap text.
+
+        Chrome and PowerPoint measure glyph advances slightly differently, so a
+        line that exactly fills its box in the browser can overflow by a fraction
+        of a percent in PowerPoint and get pushed onto a second line. The box is
+        sized from the browser's own measurement, so widening it slightly is safe
+        and never changes the visible layout.
+
+        Text the browser wrapped itself keeps the small fixed nudge: widening a
+        genuinely multi-line block would change where its lines break.
+        """
+        flat_safety_margin = Pt(2)
+
+        if rendered_line_count is None or rendered_line_count > 1:
+            return flat_safety_margin
+
+        # Bold and large text accumulate the most measurement drift, so scale the
+        # allowance with the font size rather than using a single fixed value.
+        font_size = 0
+        for paragraph in paragraphs or []:
+            if paragraph.font and paragraph.font.size:
+                font_size = max(font_size, paragraph.font.size)
+
+        proportional_margin = Pt(max(4, round(font_size * 0.25)))
+        # Never grow past the slide edge.
+        available_width = Pt(max(0, self.SLIDE_WIDTH_PT - position.left - position.width))
+
+        return max(flat_safety_margin, min(proportional_margin, available_width))
 
     def add_paragraphs(
         self, textbox: TextFrame, paragraph_models: List[PptxParagraphModel]
