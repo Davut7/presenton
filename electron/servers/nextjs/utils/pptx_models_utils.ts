@@ -37,6 +37,54 @@ function convertTextAlignToPptxAlignment(textAlign?: string): PptxAlignment | un
   }
 }
 
+// Slide width in points, matching the 1280x720 capture viewport.
+const SLIDE_WIDTH_PT = 1280;
+
+/**
+ * Widens a text box so it can hold the text a renderer draws without CSS
+ * letter-spacing.
+ *
+ * The .pptx format carries no letter-spacing, so an element laid out with
+ * negative tracking gets a box narrower than the text PowerPoint and Google
+ * Slides actually produce. PowerPoint overflows sideways so it looks fine;
+ * Google Slides re-wraps the line instead. Growing the box to the untracked
+ * width keeps the text on one line in both.
+ *
+ * Only single-line text is grown: widening a genuinely wrapped block would move
+ * where its lines break. The box is anchored on whichever edge its alignment
+ * pins, so the text does not visibly shift, and never grows past the slide edge.
+ */
+function fitPositionToUntrackedText(
+  position: PptxPositionModel,
+  element: ElementAttributes
+): PptxPositionModel {
+  const untracked = element.untrackedTextWidth;
+  if (!untracked || element.renderedLineCount !== 1) {
+    return position;
+  }
+
+  const needed = Math.ceil(untracked);
+  if (needed <= position.width) {
+    return position;
+  }
+
+  const align = element.textAlign ?? "left";
+  let left = position.left;
+  if (align === "center") {
+    // Grow symmetrically so the centre line stays put.
+    left = position.left - Math.round((needed - position.width) / 2);
+  } else if (align === "right") {
+    // Right edge is the anchor, so take the extra width from the left.
+    left = position.left - (needed - position.width);
+  }
+
+  // Keep the box on the slide.
+  left = Math.max(0, left);
+  const width = Math.min(needed, SLIDE_WIDTH_PT - left);
+
+  return { ...position, left, width };
+}
+
 function convertLineHeightToRelative(lineHeight?: number, fontSize?: number): number | undefined {
   if (!lineHeight) return undefined;
 
@@ -104,12 +152,12 @@ function convertElementToPptxShape(
 }
 
 function convertToTextBox(element: ElementAttributes): PptxTextBoxModel {
-  const position: PptxPositionModel = {
+  const position: PptxPositionModel = fitPositionToUntrackedText({
     left: Math.round(element.position?.left ?? 0),
     top: Math.round(element.position?.top ?? 0),
     width: Math.round(element.position?.width ?? 0),
     height: Math.round(element.position?.height ?? 0)
-  };
+  }, element);
 
   const fill: PptxFillModel | undefined = element.background?.color ? {
     color: element.background.color,
@@ -138,12 +186,13 @@ function convertToTextBox(element: ElementAttributes): PptxTextBoxModel {
     fill,
     position,
     text_wrap: element.textWrap ?? true,
+    rendered_line_count: element.renderedLineCount,
     paragraphs: [paragraph]
   };
 }
 
 function convertToAutoShapeBox(element: ElementAttributes): PptxAutoShapeBoxModel {
-  const position: PptxPositionModel = {
+  const rawPosition: PptxPositionModel = {
     left: Math.round(element.position?.left ?? 0),
     top: Math.round(element.position?.top ?? 0),
     width: Math.round(element.position?.width ?? 0),
@@ -191,6 +240,13 @@ function convertToAutoShapeBox(element: ElementAttributes): PptxAutoShapeBoxMode
     }
   }
 
+  // Only grow shapes that are pure text carriers: widening a shape with a
+  // visible fill, border or shadow would change what the slide looks like.
+  const hasVisibleBox = Boolean(fill || stroke || shadow || borderRadius);
+  const position = hasVisibleBox
+    ? rawPosition
+    : fitPositionToUntrackedText(rawPosition, element);
+
   return {
     shape_type: "autoshape",
     type: shapeType,
@@ -200,6 +256,7 @@ function convertToAutoShapeBox(element: ElementAttributes): PptxAutoShapeBoxMode
     shadow,
     position,
     text_wrap: element.textWrap ?? true,
+    rendered_line_count: element.renderedLineCount,
     border_radius: borderRadius ? Math.round(borderRadius) : undefined,
     paragraphs
   };

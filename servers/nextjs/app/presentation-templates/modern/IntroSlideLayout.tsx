@@ -78,20 +78,22 @@ const IntroPitchDeckSlide: React.FC<IntroSlideLayoutProps> = ({
           }}
         >
           {slideData?.title && (
-            <div className="relative inline-block">
+            <div className="block">
               <h1
-                className="text-5xl font-bold leading-none"
-                style={{ color: 'var(--background-text, #1E4CD9)' }}
+                className="text-5xl font-bold"
+                style={{
+                  color: 'var(--background-text, #1E4CD9)',
+                  lineHeight: 1.15,
+                  overflowWrap: "break-word",
+                }}
                 id="pitchdeck-title"
               >
                 {slideData?.title}
               </h1>
               <span
-                className="block h-[4px] absolute left-0"
+                className="block h-[4px] mt-4"
                 style={{
                   width: "50%",
-                  bottom: "-0.5em",
-                  transition: "width 0.3s",
                   backgroundColor: 'var(--primary-color, #1E4CD9)'
                 }}
               />
