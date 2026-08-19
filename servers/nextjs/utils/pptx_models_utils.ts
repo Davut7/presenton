@@ -132,7 +132,7 @@ function convertElementToPptxShape(
     return null;
   }
 
-  if (element.tagName === 'img' || (element.className && typeof element.className === 'string' && element.className.includes('image')) || element.imageSrc) {
+if (element.tagName !== 'svg' && (element.tagName === 'img' || (element.className && typeof element.className === 'string' && element.className.includes('image')) || element.imageSrc)) {
     return convertToPictureBox(element);
   }
 
@@ -234,9 +234,12 @@ function convertToAutoShapeBox(element: ElementAttributes): PptxAutoShapeBoxMode
   const shapeType = element.borderRadius ? PptxShapeType.ROUNDED_RECTANGLE : PptxShapeType.RECTANGLE;
 
   let borderRadius = undefined;
-  for (const eachCornerRadius of element.borderRadius ?? []) {
-    if (eachCornerRadius > 0) {
-      borderRadius = Math.max(borderRadius ?? 0, eachCornerRadius);
+  if (element.borderRadius) {
+    // Assume it's an array of numbers
+    const validRadii = element.borderRadius
+      .filter(radius => typeof radius === 'number' && !isNaN(radius) && radius > 0);
+    if (validRadii.length > 0) {
+      borderRadius = Math.round(Math.max(...validRadii));
     }
   }
 
