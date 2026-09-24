@@ -102,6 +102,25 @@ async function getBrowserAndPage(id: string): Promise<[Browser, Page]> {
     waitUntil: "networkidle0",
     timeout: 300000,
   });
+
+  try {
+    // дождаться, что у всех графиков нарисованы серии
+    await page.waitForFunction(() => {
+      const charts = document.querySelectorAll(".recharts-wrapper");
+      return [...charts].every((c) =>
+        c.querySelector(
+          ".recharts-bar-rectangle, .recharts-line-curve, .recharts-area-area, " +
+          ".recharts-pie-sector, .recharts-scatter-symbol, .recharts-radar-polygon"
+        )
+      );
+    }, { timeout: 15000 }).catch(() => {});
+
+    // запас на завершение анимации, если она не отключена
+    await new Promise((r) => setTimeout(r, 1500));
+  } catch (error) {
+    console.log("Warning: Awaiting for charts failed:", error);
+  }
+
   return [browser, page];
 }
 
@@ -216,22 +235,37 @@ async function screenshotElement(
 const convertSvgToPng = async (element_attibutes: ElementAttributes) => {
   const svgHtml =
     (await element_attibutes.element?.evaluate((el) => {
-      // Apply font color
-      const fontColor = window.getComputedStyle(el).color;
-      (el as HTMLElement).style.color = fontColor;
-
-      return el.outerHTML;
+      const svg = el.cloneNode(true) as SVGSVGElement;
+      const src = [el, ...Array.from(el.querySelectorAll("*"))];
+      const dst = [svg, ...Array.from(svg.querySelectorAll("*"))];
+      const props = [
+        "fill", "fill-opacity", "stroke", "stroke-width", "stroke-opacity",
+        "stroke-dasharray", "stroke-linecap", "stroke-linejoin", "opacity",
+        "font-family", "font-size", "font-weight", "text-anchor", "visibility",
+      ];
+      src.forEach((s, i) => {
+        const cs = window.getComputedStyle(s);
+        props.forEach((p) => {
+          const v = cs.getPropertyValue(p);
+          if (v) dst[i].setAttribute(p, v);
+        });
+      });
+      const r = el.getBoundingClientRect();
+      svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+      svg.setAttribute("width", String(r.width));
+      svg.setAttribute("height", String(r.height));
+      if (!svg.getAttribute("viewBox")) {
+        svg.setAttribute("viewBox", `0 0 ${r.width} ${r.height}`);
+      }
+      return svg.outerHTML;
     })) || "";
 
-  const svgBuffer = Buffer.from(svgHtml);
-  const pngBuffer = await sharp(svgBuffer)
-    .resize(
-      Math.round(element_attibutes.position!.width!),
-      Math.round(element_attibutes.position!.height!)
-    )
+  const w = Math.round(element_attibutes.position!.width!);
+  const h = Math.round(element_attibutes.position!.height!);
+  return sharp(Buffer.from(svgHtml), { density: 192 })
+    .resize(w * 2, h * 2)   // 2x для чёткости в PPTX
     .toFormat("png")
     .toBuffer();
-  return pngBuffer;
 };
 
 async function getSlidesAttributes(
@@ -399,7 +433,8 @@ async function getAllChildElementsAttributes({
     allResults.push({ attributes, depth });
 
     // If the element is a canvas, or table, we don't need to go deeper
-    if (attributes.should_screenshot && attributes.tagName !== "svg") {
+    // было: if (attributes.should_screenshot && attributes.tagName !== "svg") {
+    if (attributes.should_screenshot) {
       continue;
     }
 

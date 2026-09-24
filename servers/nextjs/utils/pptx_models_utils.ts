@@ -132,7 +132,7 @@ function convertElementToPptxShape(
     return null;
   }
 
-if (element.tagName !== 'svg' && (element.tagName === 'img' || (element.className && typeof element.className === 'string' && element.className.includes('image')) || element.imageSrc)) {
+if (element.tagName === 'img' || (element.className && typeof element.className === 'string' && element.className.includes('image')) || element.imageSrc) {
     return convertToPictureBox(element);
   }
 
