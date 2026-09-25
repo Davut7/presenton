@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import secrets
 from typing import Optional
 import uuid
@@ -17,6 +17,6 @@ class AsyncPresentationGenerationTaskModel(SQLModel, table=True):
     status: str
     message: Optional[str] = None
     error: Optional[dict] = Field(sa_column=Column(JSON), default=None)
-    created_at: datetime = Field(default_factory=datetime.now)
-    updated_at: datetime = Field(default_factory=datetime.now)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     data: Optional[dict] = Field(sa_column=Column(JSON), default=None)

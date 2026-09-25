@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 import json
 import math
 import os
@@ -136,7 +136,7 @@ async def _heartbeat_task(
                 if row.status in ("completed", "error"):
                     return
                 row.message = message
-                row.updated_at = datetime.now()
+                row.updated_at = datetime.now(timezone.utc)
                 session.add(row)
                 await session.commit()
         except Exception as e:
@@ -593,7 +593,7 @@ async def generate_presentation_handler(
     def _progress(percent: int, message: str, status: str = "in_progress", data: dict = None):
         if async_status:
             async_status.message = message
-            async_status.updated_at = datetime.now()
+            async_status.updated_at = datetime.now(timezone.utc)
         if task_id:
             _notify_progress(task_id, percent, message, status, data)
 
@@ -1023,7 +1023,7 @@ async def generate_presentation_handler(
         if async_status:
             async_status.status = "error"
             async_status.message = "Presentation generation failed"
-            async_status.updated_at = datetime.now()
+            async_status.updated_at = datetime.now(timezone.utc)
             async_status.error = api_error_model.model_dump(mode="json")
             sql_session.add(async_status)
             await sql_session.commit()
